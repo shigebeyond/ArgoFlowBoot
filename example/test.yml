@@ -1,0 +1,20 @@
+- flow(test):
+    - vc: # 共享的pvc, 所有任务的容器都会挂载
+        - work:/work:1Gi # pvc名:挂载路径:空间大小
+    - art: # 共享文件(工件), 所有任务都可读写
+        - test:/tmp/test.txt # 工件名: 挂载路径
+    # 工作流入口必然是main
+    - steps(main):
+        - write-art
+        - read-art(write-art.@test) # 需要找到上一个写的，然后传递到下一个调用中
+    - container(write-art): # 写工件
+          image: docker/whalesay:latest
+          command: cowsay hello world > ${@test}
+          out:
+            msg: hello
+            '@test':
+    - container(read-art,@test): # 读工件
+          command: cat ${@test}
+
+
+
