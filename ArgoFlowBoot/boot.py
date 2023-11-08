@@ -7,6 +7,7 @@ import json
 import os
 import re
 from itertools import groupby
+from typing import Callable
 from urllib import parse
 from pyutilb import util
 from pyutilb.util import *
@@ -16,9 +17,6 @@ from pyutilb import YamlBoot, BreakException
 from pyutilb.log import log
 from dotenv import dotenv_values
 from kubernetes import client, config
-
-# 调整变量的正则, 支持@前缀, 表示artifact路径变量
-util.reg_var_pure = '@?[\w\d_]+'
 
 '''
 argo flow配置生成的基于yaml的启动器
@@ -34,9 +32,17 @@ class Boot(YamlBoot):
         self.stat_dump = False
         # 动作映射函数
         actions = {
-            'ns': self.ns,
             'flow': self.flow,
             'labels': self.labels,
+            'args': self.args,
+            'vc': self.vc,
+            'art': self.art,
+            'container': self.container,
+            'script': self.script,
+            'steps': self.steps,
+            'apply': self.apply,
+            'delete': self.delete,
+            'suspend': self.suspend,
         }
         # python版本
         py_versions = '3.6/3.7/3.8/3.9/3.10/3.11'.split('/')
@@ -53,20 +59,26 @@ class Boot(YamlBoot):
         custom_funs.update(funcs)
 
         # flow作用域的属性，跳出flow时就清空
-        self._flow = '' # 应用名
+        self._flow = '' # 流程名
         self._labels = {}  # 记录标签
+        self._args = {}  # 记录流程级传参
         self._templates = {}  # 记录模板，key是模板名，value是模板定义
-        self._template_args = {} # 记录模板名对参数
+        self._template_inputs = {} # 记录模板的输入参数名
+        self._template_outputs = {} # 记录模板的输出参数名
+        self._vc_templates = [] # 记录vs模板
         self._vc_mounts = {} # 记录vs挂载路径，key是vc名，value是挂载路径
         self._arts = {} # 记录工件映射的路径，key是工件名，value是挂载路径
 
     # 清空app相关的属性
     def clear_app(self):
-        self._flow = None  # 应用名
+        self._flow = None  # 流程名
         set_var('flow', None)
         self._labels = {}  # 记录标签
+        self._args = {}  # 记录流程级传参
         self._templates = {}  # 记录模板，key是模板名，value是模板定义
-        self._template_args = {} # 记录模板名对参数
+        self._template_inputs = {} # 记录模板的输入参数名
+        self._template_outputs = {} # 记录模板的输出参数名
+        self._vc_templates = [] # 记录vs模板
         self._vc_mounts = {} # 记录vs挂载路径，key是vc名，value是挂载路径
         self._arts = {} # 记录工件映射的路径，key是工件名，value是挂载路径
 
@@ -75,10 +87,9 @@ class Boot(YamlBoot):
         保存yaml
         :param data 资源数据
         '''
-        # 拼接文件名
         # 检查流程名
         if self._flow is None:
-            raise Exception(f"生成工作流文件失败: 没有指定应用")
+            raise Exception(f"生成工作流文件失败: 没有指定流程")
         file = f"{self._flow}.yml"
         # 转yaml
         if isinstance(data, list): # 多个资源
@@ -107,9 +118,6 @@ class Boot(YamlBoot):
         :param steps 子步骤
         name 流程名
         '''
-        # 如果应用名以@开头, 表示应用名也作为pod的主机名
-        if name.startswith('@'):
-            name = name[1:]
         # app名可带参数
         name = replace_var(name)
         self._flow = name
@@ -126,16 +134,14 @@ class Boot(YamlBoot):
         # 清空app相关的属性
         self.clear_app()
 
-    def build_metadata(self, anns=None):
-        meta = {
-            "apiVersion": "argoproj.io/v1alpha1",
-            "kind": "Workflow",
-            "generateName": self._flow + '-',
-            "labels": self.build_labels()
-        }
-        if anns:
-            meta['annotations'] = anns
-        return meta
+    @replace_var_on_params
+    def labels(self, lbs):
+        '''
+        设置流程标签
+        :param lbs:
+        :return:
+        '''
+        self._labels.update(lbs)
 
     def build_labels(self, lbs = None):
         if not lbs:
@@ -143,35 +149,39 @@ class Boot(YamlBoot):
         # 合并标签
         return dict(lbs, **self._labels)
 
-    def build_flow(self, option):
+    def build_flow(self):
+        # 入口为main
+        ep = "main"
+        if ep not in self._templates:
+            raise Exception("未定义入口模板: main")
+
         yaml = {
-          "metadata": self.build_metadata(),
-          "spec": {
-            "arguments": {
-              "parameters": [
-                {
-                  "name": "message",
-                  "value": "hello argo"
+            "metadata": {
+                "apiVersion": "argoproj.io/v1alpha1",
+                "kind": "Workflow",
+                "generateName": self._flow + '-',
+                "labels": self.build_labels()
+            },
+            "spec": {
+                "arguments": self._args,
+                "entrypoint": ep,
+                "volumeClaimTemplates": self._vc_templates,
+                "templates": list(self._templates.values()),
+                "ttlStrategy": {
+                    "secondsAfterCompletion": 300
+                },
+                "podGC": {
+                    "strategy": "OnPodCompletion"
                 }
-              ]
-            },
-            "entrypoint": "main",
-            "volumeClaimTemplates": self.build_vc(get_and_del_dict_item(option, 'vc')),
-            "templates": self._templates.values(),
-            "ttlStrategy": {
-              "secondsAfterCompletion": 300
-            },
-            "podGC": {
-              "strategy": "OnPodCompletion"
             }
-          }
         }
         self.save_yaml(yaml)
 
     def build_volume_mounts(self):
-        return [{ "name": k, "mountPath": k } for k, v in self._vc_mounts.items()]
+        return [{ "name": k, "mountPath": v } for k, v in self._vc_mounts.items()]
 
-    def build_volume_claims(self, mounts):
+    @replace_var_on_params
+    def vc(self, mounts):
         '''
         构建持久卷声明
         :params mounts 多行，格式为
@@ -182,7 +192,6 @@ class Boot(YamlBoot):
         if isinstance(mounts, str):
             mounts = [mounts]
 
-        ret = []
         for mount in mounts:
             # 1 默认名为work
             if ':' not in mount:
@@ -208,12 +217,12 @@ class Boot(YamlBoot):
                     }
                 }
             }
-            ret.append(vc)
+            self._vc_templates.append(vc)
 
             # 3 记录挂载路径
             self._vc_mounts[name] = mount_path
-        return ret
 
+    @replace_var_on_params
     def art(self, arts):
         '''
         共享文件(工件), 所有任务都可读写
@@ -248,11 +257,22 @@ class Boot(YamlBoot):
             set_var('@'+name, path) # 设置变量
         return ret
 
-    # 准备参数的变量
-    def prepare_param_var(self):
-        for i in range(0, 10):
-            name = f"p{i}" # 变量名
-            set_var(name, "{{inputs.parameters." + name + "}}")
+    # 流程级传参
+    @replace_var_on_params
+    def args(self, args):
+        self._args = self.build_dict_args(args, 'flow')
+
+    def ref_pod_field(self, field):
+        '''
+        在给环境变量赋时值，注入Pod信息
+          参考 https://blog.csdn.net/skh2015java/article/details/109229107
+        :param field Pod信息字段，仅支持 metadata.name, metadata.namespace, metadata.uid, spec.nodeName, spec.serviceAccountName, status.hostIP, status.podIP, status.podIPs
+        '''
+        return {
+            "fieldRef": {
+                "fieldPath": field
+            }
+        }
 
     def ref_resource_field(self, field):
         '''
@@ -272,9 +292,10 @@ class Boot(YamlBoot):
         在给环境变量赋值时，注入配置信息
         :param key
         '''
+        name, key = key.split('.')
         return {
             "configMapKeyRef":{
-              "name": self._app, # The ConfigMap this value comes from.
+              "name": name, # The ConfigMap this value comes from.
               "key": key # The key to fetch.
             }
         }
@@ -284,95 +305,166 @@ class Boot(YamlBoot):
         在给环境变量赋值时，注入secret信息
         :param key
         '''
+        name, key = key.split('.')
         return {
             "secretKeyRef":{
-              "name": self._app, # The Secret this value comes from.
+              "name": name, # The Secret this value comes from.
               "key": key # The key to fetch.
             }
         }
 
-    def parse_template_func(self, expr):
-        # 解析函数调用
-        name, args = parse_func(expr)
-        # 记录模板名对参数
-        self._template_args[name] = args
-
     def container(self, options):
-        for name, option in options:
-            name, args = parse_func(name)
-            inputs = self.build_inputs(args)
+        self.build_template(options, self.build_container)
+
+    def build_container(self, option):
+        ret = {
+            "container": {
+                "image": get_and_del_dict_item(option, "image", "alpine:3.6"),
+                "command": self.fix_command(get_and_del_dict_item(option, "command")),
+                "args": self.fix_command_args(get_and_del_dict_item(option, "args")),
+                "volumeMounts": self.build_volume_mounts(),
+                **option
+            },
+        }
+        del_dict_none_item(ret["container"])
+        return ret
+
+    def build_template(self, options: dict, body_builder: Callable):
+        for name, option in options.items():
+            # 解析函数调用
+            name, args = parse_func(name, True)
+            # 构建输入
+            self._template_inputs[name] = args # 记录模板的输入参数名
+            # push_vars_stack() # 变量入栈
+            inputs = self.build_list_args(args, 'inputs') # 构建输入，会增加变量
+            if body_builder != self.build_steps: # steps延迟替换变量
+                option = replace_var(option, False) # 替换变量
+            # 构建输出
+            out = get_and_del_dict_item(option, 'out')
+            outputs = self.build_dict_args(out, 'outputs') # 构建输出
+            if out:
+                self._template_outputs[name] = out.keys()  # 记录模板的输出参数名
+            # 构建正文
+            body = body_builder(option)
             tpl = {
                 "name": name,
-                "container": {
-                    "image": get_and_del_dict_item(option, "image", "alpine:3.6"),
-                    "command": self.fix_command(get_and_del_dict_item(option, "command")),
-                    "args": self.fix_command_args(get_and_del_dict_item(option, "args")),
-                    "volumeMounts": self.build_volume_mounts(),
-                    **option
-                },
-                "inputs": inputs
+                "inputs": inputs,
+                "outputs": outputs,
+                **body
             }
+            # pop_vars_stack() # 变量出栈
             del_dict_none_item(tpl)
             self._templates[name] = tpl
 
-    # 构建input参数
-    def build_inputs(self, args):
+    def build_dict_args(self, args: dict, type: str):
+        '''
+        构建inputs/outputs/flow/call(调用模板)等的dict类型的参数
+        :param args:
+        :param type: 参数类型: inputs/outputs/flow/call(调用模板)
+        :return:
+        '''
         if not args:
             return None
         # 拆分parameters与artifacts
-        params = []
-        arts = []
-        for arg in args:
-            if arg.startswith('@'): # artifacts
-                arts.append(arg)
-            else:
-                params.append(arg)
-                set_var(arg, '{{inputs.parameters.' + arg + '}}') # 设变量
-        # 构建input参数
-        return {
+        params = {}
+        arts = {}
+        for k, v in args.items():
+            if k.startswith('@'): # artifacts
+                arts[k] = v
+            else: # parameters
+                params[k] = v
+                if type == 'inputs' or type == 'flow':
+                    set_var(k, '{{inputs.parameters.' + k + '}}') # 设变量
+        # 构建参数
+        ret = {
             "parameters": self.build_params(params),
-            "artifacts": self.build_artifacts(arts),
+            "artifacts": self.build_artifacts(arts, type),
         }
+        del_dict_none_item(ret)
+        return ret
 
-    # 构建output参数
-    def build_outputs(self, args):
+    def build_list_args(self, args: list, type: str):
+        '''
+        构建inputs/outputs/flow/call(调用模板)等的list类型的参数
+        :param args:
+        :param type: 参数类型: inputs/outputs/flow/call(调用模板)
+        :return:
+        '''
         if not args:
             return None
         # 拆分parameters与artifacts
         params = []
         arts = []
         for arg in args:
-            if arg.startswith('@'): # artifacts
+            if arg.startswith('@'):  # artifacts
                 arts.append(arg)
-            else:
+            else: # parameters
                 params.append(arg)
-        # 构建input参数
-        return {
+                if type == 'inputs' or type == 'flow':
+                    set_var(arg, '{{inputs.parameters.' + arg + '}}')  # 设变量
+        # 构建参数
+        ret = {
             "parameters": self.build_params(params),
-            "artifacts": self.build_artifacts(arts),
+            "artifacts": self.build_artifacts(arts, type),
         }
+        del_dict_none_item(ret)
+        return ret
 
     # 构建模板的输入参数
-    def build_artifacts(self, arts):
-        return [self.build_artifact(i, v) for i, v in enumerate(arts)]
+    def build_artifacts(self, option, type=None):
+        if not option:
+            return None
 
-    def build_artifact(self, key):
+        if isinstance(option, list):
+            return [self.build_artifact(v, None, type) for v in option]
+
+        if isinstance(option, dict):
+            return [self.build_artifact(k, v, type) for k, v in option.items()]
+
+        raise Exception(f"无效参数选项: {option}")
+
+    def build_artifact(self, key, value=None, type=None):
+        '''
+        构建工件
+        :param key:
+        :param value:
+        :param type
+        :return:
+        '''
+        key = key.replace('@', '')
+        if isinstance(value, dict):
+            return {
+                "name": key,
+                **value
+            }
+
+        if type == 'call': # 调用模板
+            path_field = "from"
+        else:
+            path_field = "path"
         return {
             "name": key,
-            "path": self._arts[key]
+            path_field: value or self._arts[key] # 优先用用户填的，其次用全局配的
         }
 
     # 构建模板的输入参数
     def build_params(self, option):
+        if not option:
+            return None
+
         if isinstance(option, list):
-            return [self.build_param(i, v) for i, v in enumerate(option)]
+            return [self.build_param(v) for v in option]
 
         if isinstance(option, dict):
             return [self.build_param(k, v) for k, v in option.items()]
 
         raise Exception(f"无效参数选项: {option}")
 
-    def build_param(self, key, value):
+    def build_param(self, key, value=None):
+        if value is None:
+            return {
+                "name": key
+            }
         if isinstance(value, dict):
             return {
                 "name": key,
@@ -395,64 +487,93 @@ class Boot(YamlBoot):
         return args
 
     def steps(self, options):
-        for name, steps in options:
-            name, args = parse_func(name)
-            tpl = {
-                    "name": name,
-                    "steps": [
-                        [{
-                            "name": "flip-coin",
-                            "template": "flip-coin"
-                        }],
-                        [{
-                            "name": "heads",
-                            "template": "heads",
-                            "when": "{{steps.flip-coin.outputs.result}} == heads"
-                        }, {
-                            "name": "tails",
-                            "template": "tails",
-                            "when": "{{steps.flip-coin.outputs.result}} == tails"
-                        }]
-                    ]
-                }
-            self._templates[name] = tpl
+        self.build_template(options, self.build_steps)
 
-    def build_step(self, step):
+    # 构建steps
+    def build_steps(self, option):
+        steps = option['calls']
+        # 多个步骤
+        if isinstance(steps, list):
+            return {
+                "steps": list(map(self.build_step, steps))
+            }
+
+        # 多个步骤，带步骤名
+        if isinstance(steps, dict):
+            return {
+                "steps": [self.build_step(step, name) for name, step in steps.items()]
+            }
+
+        # 单个步骤
+        return self.build_step(steps)
+
+    # 构建step
+    #@replace_var_on_params
+    def build_step(self, step, name = None):
+        # list要递归，因为steps中--代表顺序执行，- 代表并行执行，也就是可能有多层list，要递归调用
         if isinstance(step, list):
             return list(map(self.build_step, step))
-        name, args = parse_func(step)
+
+        # dict: template+when
+        when = None
+        if isinstance(step, dict):
+            when = step['when']
+            step = step['template']
+        # 解析模板
+        step = replace_var(step)
+        template, args = parse_func(step, True)
+        if name is None:
+            name = template # 步骤名=模板名
+        # 拼接步骤
         ret = {
             "name": name,
-            "template": name
+            "template": template
         }
+        if when:
+            ret['when'] = when
         if args:
-            ret['arguments'] = {
-                'parameters': self.build_call_params(name, args)
-            }
+            ret['arguments'] = self.build_step_call_args(name, args)
+        # 输出变量
+        self.build_step_out_vars(template, name)
         return ret
 
-    # 构建调用的参数
-    def build_call_params(self, tpl_name, vals):
-        # 参数名
-        names = self._template_args[tpl_name]
+    # 构建steps调用的输出变量
+    def build_step_out_vars(self, tpl_name, step_name):
+        # 输出参数名
+        names = self._template_outputs.get(tpl_name)
+        # 遍历输出的参数，来设置变量
+        vals = {}
+        if names:
+            for name in names:
+                if name.startswith('@'):  # artifacts: {{steps.generate.outputs.artifacts.out-artifact}}
+                    val = '{{steps.' + step_name + '.outputs.artifacts.' + name[1:] + '}}'
+                else:  # parameters: {{steps.generate.outputs.parameters.out-parameter}}
+                    val = '{{steps.' + step_name + '.outputs.parameters.' + name + '}}'
+                vals[name] = val
+        # 设置result变量，注：不建议输出参数名用result
+        if 'result' not in vals:
+            vals['result'] = '{{steps.' + step_name + '.outputs.result}}'
+        set_var(step_name, vals)
+
+    # 构建steps调用的参数
+    def build_step_call_args(self, tpl_name, vals):
+        # 输入参数名
+        names = self._template_inputs[tpl_name]
         if len(names) != len(vals):
             raise Exception(f"调用模板{tpl_name}的参数个数与声明的参数个数不一致")
-        ret = []
-        for i in range(0, len(names)):
-            param = self.build_param(names[i], vals[i])
-            ret.append(param)
-        return ret
 
-    def script(self, option, name):
-        pass
+        args = dict(zip(names, vals))
+        return self.build_dict_args(args, 'call')
 
-    def wrap_python(self, version):
-        def wrapper(*args):
-            return self.build_python(version, *args)
-        return wrapper
+    def script(self, options):
+        self.build_template(options, self.build_script)
 
-    def build_python(self, version, option, name):
-        image = get_and_del_dict_item(option, "image", f"python:alpine{version}")
+    def build_script(self, option, default_image="docker/whalesay:latest"):
+        image = get_and_del_dict_item(option, "image", default_image)
+        # 命令
+        cmd = get_and_del_dict_item(option, "command")
+        if isinstance(cmd, str):
+            cmd = [cmd]
         # 源码
         src = get_and_del_dict_item(option, "source")
         if 'file' in option:
@@ -462,25 +583,51 @@ class Boot(YamlBoot):
         if not env:
             env = None
         return {
-            "name": name,
             "script": {
                 "image": image,
-                "command": ["python"],
+                "command": cmd,
                 "source": src,
                 "env": env,
                 **option
             }
         }
 
-    def delay(self, duration):
+    def wrap_python(self, version):
+        def wrapper(*args):
+            return self.python_script(version, *args)
+        return wrapper
+
+    def python_script(self, version, options):
+        def builder(option):
+            return self.build_script(option, default_image=f"python:alpine{version}")
+        self.build_template(options, builder)
+
+    # 暂停
+    def suspend(self, options):
+        if not isinstance(options, dict):
+            options = {
+                # 模板名: 选项
+                'wait': options
+            }
+        self.build_template(options, self.build_suspend)
+
+    def build_suspend(self, option):
+        if option is None:
+            return {
+                "suspend": {}
+            }
+
+        if isinstance(option, (int, str)):
+            duration = option
+        else:
+            duration = option['duration']
         return {
-            "name": "delay",
             "suspend": {
                 "duration": str(duration) # Must be a string. Default unit is seconds. Could also be a Duration, e.g.: "2m", "6h", "1d"
             }
         }
 
-    # 应用资源文件
+    # 流程资源文件
     def apply(self, option, name):
         return self.do_res_action("apply", name, option)
 
@@ -502,7 +649,7 @@ class Boot(YamlBoot):
             }
         }
 
-    #
+    # dag 依赖关系
     def dag(self, deps, name):
         tasks = []
         if isinstance(deps, str):
@@ -512,7 +659,7 @@ class Boot(YamlBoot):
             if not dep:
                 continue
             items = dep.split('->') # 分割每个点
-            items = list(map(lambda x: x.split(','), items)) # 点中有点, 逗号分割
+            items = list(map(lambda x: x.split(';'), items)) # 点中有点, 分号分割
             # 首个点: 无依赖
             for node in items[0]:
                 task = {
@@ -556,8 +703,7 @@ def main():
         log.error(f"Exception occurs: current step file is %s", boot.step_file, exc_info=ex)
         raise ex
 
-
 if __name__ == '__main__':
-    # main()
-    data = read_yaml('/home/shi/code/python/ArgoFlowBoot/example/test.yml')
-    print(json.dumps(data))
+    main()
+    # data = read_yaml('/home/shi/code/python/ArgoFlowBoot/example/test.yml')
+    # print(json.dumps(data))
