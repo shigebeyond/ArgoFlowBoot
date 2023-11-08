@@ -1,0 +1,13 @@
+# https://argoproj.github.io/argo-workflows/walk-through/parameters/
+- flow(input-test):
+    - args: # 流程级参数
+        msg: hello world
+    - templates:
+        main(msg): # 工作流入口必然是main
+            container:
+              image: docker/whalesay:latest
+              command: cowsay $msg
+
+
+
+

@@ -32,10 +32,6 @@ class Boot(YamlBoot):
             'artifacts': self.artifacts,
             'templates': self.templates,
         }
-        # python版本
-        py_versions = '3.6/3.7/3.8/3.9/3.10/3.11'.split('/')
-        for version in py_versions:
-            actions['python'+version] = self.wrap_python(version)
         self.add_actions(actions)
 
         # 自定义函数
@@ -68,6 +64,10 @@ class Boot(YamlBoot):
             'delete': self.build_delete,
             'dag': self.build_dag,
         }
+        # python版本
+        py_versions = '3.6/3.7/3.8/3.9/3.10/3.11'.split('/')
+        for version in py_versions:
+            self.template_body_builders['python'+version] = self.wrap_build_python(version)
 
         # 任务命名者
         self.namer = FuncIncrTaskNamer()
@@ -230,44 +230,30 @@ class Boot(YamlBoot):
     @replace_var_on_params
     def artifacts(self, arts):
         '''
-        TODO: 支持各种协议 https://argoproj.github.io/argo-workflows/walk-through/hardwired-artifacts/
         共享文件(工件), 所有任务都可读写
-        :param option: 多行，格式为
-                     test:/tmp/test.txt -- 工件名: 挂载路径
-                     test:https://storage.googleapis.com/kubernetes-release/release/v1.8.0/bin/linux/amd64/kubectl -- 工件名:协议://路径
+        :param option: 参考 ArgoFlowBoot/example/artifact-type.yml
+                      https://argoproj.github.io/argo-workflows/walk-through/artifacts/
+                      https://argoproj.github.io/argo-workflows/walk-through/hardwired-artifacts/
         :return:
         '''
-        if arts is None or len(arts) == 0:
+        if not arts:
             return None
-        if isinstance(arts, str):
-            arts = [arts]
 
-        ret = []
-        for art in arts:
-            # 1 解析工件名:挂载路径
-            if ':' not in art:
-                raise Exception(f'无效工件参数: {art}')
-            name, art = art.split(':')
-            # 2 解析协议：协议格式参考函数注释
-            protocol = None
-            if "://" in art: # 有协议
-                #  mat = re.search('(\w+)://([\w\d\._]*)(/.+):(.+)', art)
-                mat = re.search('(\w+)://(.+)', art)
-                protocol = mat.group(1) # 协议
-                path = mat.group(2) # 主机 + 宿主机路径
-            else: # 无协议: 默认挂载
-                path = art
+        for name, option in arts.items():
+            if isinstance(option, str):
+                option = {
+                    'path': option
+                }
+            self._arts[name] = option # 记录工件映射的路径
+            set_var('@'+name, option['path']) # 设置变量
 
-            # 3 记录工件映射的路径
-            self._arts[name] = {
-                'path': path
-            }
-            set_var('@'+name, path) # 设置变量
-        return ret
-
-    # 流程级传参
     @replace_var_on_params
     def args(self, args):
+        '''
+        流程级传参, 参考 https://argoproj.github.io/argo-workflows/walk-through/parameters/
+        :param args:
+        :return:
+        '''
         self._args = self.build_dict_args(args, 'flow')
 
     def ref_pod_field(self, field):
@@ -341,6 +327,7 @@ class Boot(YamlBoot):
                 "command": self.fix_command(get_and_del_dict_item(option, "command")),
                 "args": self.fix_command_args(get_and_del_dict_item(option, "args")),
                 "volumeMounts": self.build_volume_mounts(),
+                "env": self.build_env(get_and_del_dict_item(option, 'env')),
                 **option
             },
         }
@@ -384,6 +371,9 @@ class Boot(YamlBoot):
     def build_dict_args(self, args: dict, type: str):
         '''
         构建inputs/outputs/flow/call(调用模板)等的dict类型的参数
+        输入参数参考 https://argoproj.github.io/argo-workflows/walk-through/parameters/
+        输出参数参考 https://argoproj.github.io/argo-workflows/walk-through/output-parameters/
+
         :param args:
         :param type: 参数类型: inputs/outputs/flow/call(调用模板)
         :return:
@@ -411,6 +401,9 @@ class Boot(YamlBoot):
     def build_list_args(self, args: list, type: str):
         '''
         构建inputs/outputs/flow/call(调用模板)等的list类型的参数
+        输入参数参考 https://argoproj.github.io/argo-workflows/walk-through/parameters/
+        输出参数参考 https://argoproj.github.io/argo-workflows/walk-through/output-parameters/
+
         :param args:
         :param type: 参数类型: inputs/outputs/flow/call(调用模板)
         :return:
@@ -457,19 +450,31 @@ class Boot(YamlBoot):
         :return:
         '''
         key = key.replace('@', '')
+        # 1 有明细配置dict
         if isinstance(value, dict):
             return {
                 "name": key,
                 **value
             }
 
-        if type == 'call': # 调用模板
-            path_field = "from"
-        else:
-            path_field = "path"
+        # 2 调用模板: 用from
+        if type == 'call':
+            return {
+                "name": key,
+                "from": value
+            }
+
+        # 3 优先用用户填的
+        if value is not None:
+            return {
+                "name": key,
+                "path": value
+            }
+
+        # 4 最后用全局配的
         return {
             "name": key,
-            path_field: value or self._arts[key]['path'] # 优先用用户填的，其次用全局配的
+            **self._arts[key]
         }
 
     # 构建模板的输入参数
@@ -511,8 +516,12 @@ class Boot(YamlBoot):
             return [args]
         return args
 
-    # 构建steps
     def build_steps(self, steps):
+        '''
+        构建steps, 参考 https://argoproj.github.io/argo-workflows/walk-through/steps/
+        :param steps:
+        :return:
+        '''
         # 多个步骤
         if isinstance(steps, list):
             return {
@@ -595,38 +604,55 @@ class Boot(YamlBoot):
         return self.build_dict_args(args, 'call')
 
     def build_script(self, option, default_image="docker/whalesay:latest"):
+        '''
+        构建script模板，参考 https://argoproj.github.io/argo-workflows/walk-through/scripts-and-results/
+        :param option:
+        :param default_image:
+        :return:
+        '''
         image = get_and_del_dict_item(option, "image", default_image)
         # 命令
-        cmd = get_and_del_dict_item(option, "command")
+        cmd = get_and_del_dict_item(option, "command", "bash")
         if isinstance(cmd, str):
             cmd = [cmd]
         # 源码
         src = get_and_del_dict_item(option, "source")
         if 'file' in option:
             src = read_file(get_and_del_dict_item(option, "file"))
-        # 环境变量
-        env = self.build_env(get_and_del_dict_item(option, 'env')) + self.build_env_file(get_and_del_dict_item(option, 'env_file'))
-        if not env:
-            env = None
-        return {
+        ret = {
             "script": {
                 "image": image,
                 "command": cmd,
                 "source": src,
-                "env": env,
+                "env": self.build_env(get_and_del_dict_item(option, 'env')),
                 **option
             }
         }
+        del_dict_none_item(ret["script"])
+        return ret
 
-    def wrap_python(self, version):
-        def wrapper(*args):
-            return self.python_script(version, *args)
-        return wrapper
+    # 构建容器中的环境变量
+    def build_env(self, env):
+        if env is None or len(env) == 0:
+            return None
 
-    def python_script(self, version, options):
-        def builder(option):
+        ret = []
+        for key, val in env.items():
+            item = {
+                "name": key,
+            }
+            if isinstance(val, (str, int, float)):
+                item["value"] = str(val)
+            else:
+                item["valueFrom"] = val
+            ret.append(item)
+        return ret
+
+    def wrap_build_python(self, version):
+        def wrapper(option):
+            option['command'] = 'python'
             return self.build_script(option, default_image=f"python:alpine{version}")
-        self.build_template(options, builder)
+        return wrapper
 
     def build_suspend(self, option):
         if option is None:
@@ -665,8 +691,12 @@ class Boot(YamlBoot):
             }
         }
 
-    # dag 依赖关系
     def build_dag(self, deps):
+        '''
+        构建dag(依赖关系), 参考 https://argoproj.github.io/argo-workflows/walk-through/dag/
+        :param deps:
+        :return:
+        '''
         tasks = []
         if isinstance(deps, str):
             deps = [deps]

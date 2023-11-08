@@ -1,0 +1,22 @@
+# https://argoproj.github.io/argo-workflows/walk-through/artifacts/
+- flow(artifact-test):
+    - artifacts: # 共享文件(工件), 所有任务都可读写
+        - hello-art:/tmp/hello_world.txt # 工件名: 挂载路径
+    - templates:
+        generate-artifact(): # 生成工件
+            container:
+              image: docker/whalesay:latest
+              command: cowsay hello world > ${@hello-art} # 写工件对应的文件
+            out: # 输出
+              '@hello-art': # 输出工件
+        consume-artifact(@hello-art): # 消费工件, 有1个artifacts的参数
+            container:
+              command: cat ${@hello-art}
+        main(): # 工作流入口必然是main
+            steps:
+              - generate-artifact()
+              - - consume-artifact(${generate-artifact.@hello-art}) # 需要找到上一个写的，然后传递到下一个调用中
+
+
+
+

@@ -1,0 +1,13 @@
+# https://argoproj.github.io/argo-workflows/walk-through/dag/
+- flow(dag-test):
+    - templates:
+        echo(msg): #
+            container:
+              command: echo $msg
+        main(): # 工作流入口必然是main，要放最后
+            dag:
+              - echo(A) -> echo(B);echo(C) -> echo(D)
+
+
+
+

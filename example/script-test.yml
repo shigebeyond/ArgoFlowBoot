@@ -1,0 +1,32 @@
+# https://argoproj.github.io/argo-workflows/walk-through/scripts-and-results/
+- flow(script-test):
+    - templates:
+        bash-random(): # bash生成随机数
+            script:
+              source: |
+                cat /dev/urandom | od -N2 -An -i | awk -v f=1 -v r=100 '{printf "%i\n", f + r * $1 / 65536}'
+        python-random(): # python生成随机数
+            python3.6:
+              source: |
+                import random
+                i = random.randint(1, 100)
+                print(i)
+        nodejs-random(): # nodejs生成随机数
+            script:
+              image: node:9.1-alpine
+              command: node
+              source: |
+                import random
+                i = random.randint(1, 100)
+                print(i)
+        print-message(msg): #
+            container:
+              command: echo result was $msg
+        main(): # 工作流入口必然是main
+            steps:
+              - bash-random()
+              - - print-message(${bash-random.result}) # 需要找到上一个写的，然后传递到下一个调用中
+
+
+
+

@@ -1,0 +1,16 @@
+# https://argoproj.github.io/argo-workflows/walk-through/steps/
+- flow(steps-test):
+    - templates:
+        whalesay(msg): #
+            container:
+              image: docker/whalesay
+              command: cowsay $msg
+        main(): # 工作流入口必然是main，要放最后
+            steps:
+              - whalesay(hello1)
+              - whalesay(hello2)
+              - whalesay(hello3)
+
+
+
+
