@@ -1,22 +1,15 @@
 #!/usr/bin/python3
 # -*- coding: utf-8 -*-
 
-import fnmatch
-import hashlib
 import json
 import os
 import re
-from itertools import groupby
-from typing import Callable
-from urllib import parse
-from pyutilb import util
 from pyutilb.util import *
 from pyutilb.file import *
 from pyutilb.cmd import *
 from pyutilb import YamlBoot, BreakException
 from pyutilb.log import log
-from dotenv import dotenv_values
-from kubernetes import client, config
+from ArgoFlowBoot.task_namer import *
 
 '''
 argo flow配置生成的基于yaml的启动器
@@ -36,7 +29,7 @@ class Boot(YamlBoot):
             'labels': self.labels,
             'args': self.args,
             'vc': self.vc,
-            'art': self.art,
+            'artifacts': self.artifacts,
             'templates': self.templates,
         }
         # python版本
@@ -75,6 +68,9 @@ class Boot(YamlBoot):
             'delete': self.build_delete,
             'dag': self.build_dag,
         }
+
+        # 任务命名者
+        self.namer = FuncIncrTaskNamer()
 
     # 清空app相关的属性
     def clear_app(self):
@@ -185,6 +181,8 @@ class Boot(YamlBoot):
         self.save_yaml(yaml)
 
     def build_volume_mounts(self):
+        if not self._vc_mounts:
+            return None
         return [{ "name": k, "mountPath": v } for k, v in self._vc_mounts.items()]
 
     @replace_var_on_params
@@ -230,8 +228,9 @@ class Boot(YamlBoot):
             self._vc_mounts[name] = mount_path
 
     @replace_var_on_params
-    def art(self, arts):
+    def artifacts(self, arts):
         '''
+        TODO: 支持各种协议 https://argoproj.github.io/argo-workflows/walk-through/hardwired-artifacts/
         共享文件(工件), 所有任务都可读写
         :param option: 多行，格式为
                      test:/tmp/test.txt -- 工件名: 挂载路径
@@ -260,7 +259,9 @@ class Boot(YamlBoot):
                 path = art
 
             # 3 记录工件映射的路径
-            self._arts[name] = path
+            self._arts[name] = {
+                'path': path
+            }
             set_var('@'+name, path) # 设置变量
         return ret
 
@@ -468,7 +469,7 @@ class Boot(YamlBoot):
             path_field = "path"
         return {
             "name": key,
-            path_field: value or self._arts[key] # 优先用用户填的，其次用全局配的
+            path_field: value or self._arts[key]['path'] # 优先用用户填的，其次用全局配的
         }
 
     # 构建模板的输入参数
@@ -543,7 +544,7 @@ class Boot(YamlBoot):
         step = replace_var(step)
         template, args = parse_func(step, True)
         if name is None:
-            name = template # 步骤名=模板名
+            name = self.namer.build_name(template) # 生成步骤名, 不缓存
         # 拼接步骤
         ret = {
             "name": name,
@@ -552,13 +553,21 @@ class Boot(YamlBoot):
         if when:
             ret['when'] = when
         if args:
-            ret['arguments'] = self.build_step_call_args(name, args)
+            ret['arguments'] = self.build_step_call_args(template, args)
         # 输出变量
-        self.build_step_out_vars(template, name)
+        self.build_step_out_vars(template, name, 'steps')
         return ret
 
-    # 构建steps调用的输出变量
-    def build_step_out_vars(self, tpl_name, step_name):
+    def build_step_out_vars(self, tpl_name, step_name, prefix):
+        '''
+        构建steps调用的输出变量
+        :param tpl_name:
+        :param step_name:
+        :param prefix: 表达式前缀，steps模板的前缀为steps，dag模板的前缀tasks
+                     steps: {{steps.generate.outputs.artifacts.out-artifact}}
+                     tasks: {{tasks.generate-artifact.outputs.artifacts.hello-art}}
+        :return:
+        '''
         # 输出参数名
         names = self._template_outputs.get(tpl_name)
         # 遍历输出的参数，来设置变量
@@ -566,13 +575,13 @@ class Boot(YamlBoot):
         if names:
             for name in names:
                 if name.startswith('@'):  # artifacts: {{steps.generate.outputs.artifacts.out-artifact}}
-                    val = '{{steps.' + step_name + '.outputs.artifacts.' + name[1:] + '}}'
+                    val = '{{' + prefix + '.' + step_name + '.outputs.artifacts.' + name[1:] + '}}'
                 else:  # parameters: {{steps.generate.outputs.parameters.out-parameter}}
-                    val = '{{steps.' + step_name + '.outputs.parameters.' + name + '}}'
+                    val = '{{' + prefix + '.' + step_name + '.outputs.parameters.' + name + '}}'
                 vals[name] = val
         # 设置result变量，注：不建议输出参数名用result
         if 'result' not in vals:
-            vals['result'] = '{{steps.' + step_name + '.outputs.result}}'
+            vals['result'] = '{{' + prefix + '.' + step_name + '.outputs.result}}'
         set_var(step_name, vals)
 
     # 构建steps调用的参数
@@ -662,15 +671,18 @@ class Boot(YamlBoot):
         if isinstance(deps, str):
             deps = [deps]
         for dep in deps:
-            dep = dep.replace(' ', '') # 去掉空格
+            # 去掉空格
+            #dep = dep.replace(' ', '')
+            dep = re.sub(r'\s*(->|;|,)\s*', lambda m: m.group(1), dep)
             if not dep:
                 continue
             items = dep.split('->') # 分割每个点
             items = list(map(lambda x: x.split(';'), items)) # 点中有点, 分号分割
             # 首个点: 无依赖
             for node in items[0]:
+                name = self.namer.get_name(node)
                 task = {
-                    "name": node,
+                    "name": name,
                     "template": node
                 }
                 tasks.append(task)
@@ -679,8 +691,8 @@ class Boot(YamlBoot):
                 item = items[i]
                 for node in item:
                     task = {
-                        "name": node,
-                        "dependencies": items[i-1],
+                        "name": self.namer.get_name(node),
+                        "dependencies": list(map(self.namer.get_name, items[i - 1])),
                         "template": node
                     }
                     tasks.append(task)
