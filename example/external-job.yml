@@ -1,0 +1,15 @@
+# docs/async-pattern.md
+- flow(external-job):
+  - args:
+      cmd: sleep 1000
+  - templates:
+      trigger-job(cmd): # 执行耗时任务
+          container:
+            image: appropriate/curl:latest
+            command: $cmd
+      wait-completion(uuid): # 等待耗时任务执行
+          suspend:
+      main(cmd):
+          steps:
+            - - trigger-job($cmd)
+            - - wait-completion(${trigger-job.result})

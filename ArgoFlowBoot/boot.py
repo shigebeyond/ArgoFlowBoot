@@ -37,18 +37,14 @@ class Boot(YamlBoot):
             'args': self.args,
             'vc': self.vc,
             'art': self.art,
-            'container': self.container,
-            'script': self.script,
-            'steps': self.steps,
-            'apply': self.apply,
-            'delete': self.delete,
-            'suspend': self.suspend,
+            'templates': self.templates,
         }
         # python版本
         py_versions = '3.6/3.7/3.8/3.9/3.10/3.11'.split('/')
         for version in py_versions:
             actions['python'+version] = self.wrap_python(version)
         self.add_actions(actions)
+
         # 自定义函数
         funcs = {
             'ref_pod_field': self.ref_pod_field,
@@ -68,6 +64,17 @@ class Boot(YamlBoot):
         self._vc_templates = [] # 记录vs模板
         self._vc_mounts = {} # 记录vs挂载路径，key是vc名，value是挂载路径
         self._arts = {} # 记录工件映射的路径，key是工件名，value是挂载路径
+
+        # 模板主题构建器
+        self.template_body_builders = {
+            'container': self.build_container,
+            'script': self.build_script,
+            'steps': self.build_steps,
+            'suspend': self.build_suspend,
+            'apply': self.build_apply,
+            'delete': self.build_delete,
+            'dag': self.build_dag,
+        }
 
     # 清空app相关的属性
     def clear_app(self):
@@ -313,8 +320,18 @@ class Boot(YamlBoot):
             }
         }
 
-    def container(self, options):
-        self.build_template(options, self.build_container)
+    def templates(self, options):
+        # 模板名:模板配置
+        for name, option in options.items():
+            self.build_template(name, option)
+
+    def build_template_body(self, option):
+        # 逐个匹配模板类型，并调用对应的模板主体构建器
+        for type, builder in self.template_body_builders.items():
+            if type in option:
+                return builder(option[type])
+
+        return None
 
     def build_container(self, option):
         ret = {
@@ -329,32 +346,39 @@ class Boot(YamlBoot):
         del_dict_none_item(ret["container"])
         return ret
 
-    def build_template(self, options: dict, body_builder: Callable):
-        for name, option in options.items():
-            # 解析函数调用
-            name, args = parse_func(name, True)
-            # 构建输入
-            self._template_inputs[name] = args # 记录模板的输入参数名
-            # push_vars_stack() # 变量入栈
-            inputs = self.build_list_args(args, 'inputs') # 构建输入，会增加变量
-            if body_builder != self.build_steps: # steps延迟替换变量
-                option = replace_var(option, False) # 替换变量
-            # 构建输出
-            out = get_and_del_dict_item(option, 'out')
-            outputs = self.build_dict_args(out, 'outputs') # 构建输出
-            if out:
-                self._template_outputs[name] = out.keys()  # 记录模板的输出参数名
-            # 构建正文
-            body = body_builder(option)
-            tpl = {
-                "name": name,
-                "inputs": inputs,
-                "outputs": outputs,
-                **body
-            }
-            # pop_vars_stack() # 变量出栈
-            del_dict_none_item(tpl)
-            self._templates[name] = tpl
+    def build_template(self, name: str, option: dict):
+        '''
+        构建任务模板
+        :param name: 任务模板名，函数调用的形式
+        :param option: 任务模板选项
+        :return:
+        '''
+        # 解析函数调用
+        name, args = parse_func(name, True)
+        # 构建输入
+        self._template_inputs[name] = args # 记录模板的输入参数名
+        # push_vars_stack() # 变量入栈
+        inputs = self.build_list_args(args, 'inputs') # 构建输入，会增加变量
+        if 'steps' not in option: # steps延迟替换变量
+            option = replace_var(option, False) # 替换变量
+        # 构建输出
+        out = get_and_del_dict_item(option, 'out')
+        outputs = self.build_dict_args(out, 'outputs') # 构建输出
+        if out:
+            self._template_outputs[name] = out.keys()  # 记录模板的输出参数名
+        # 构建主体
+        body = self.build_template_body(option)
+        if body is None:
+            raise Exception(f'不确定任务[{name}]的类型')
+        tpl = {
+            "name": name,
+            "inputs": inputs,
+            "outputs": outputs,
+            **body
+        }
+        # pop_vars_stack() # 变量出栈
+        del_dict_none_item(tpl)
+        self._templates[name] = tpl
 
     def build_dict_args(self, args: dict, type: str):
         '''
@@ -486,12 +510,8 @@ class Boot(YamlBoot):
             return [args]
         return args
 
-    def steps(self, options):
-        self.build_template(options, self.build_steps)
-
     # 构建steps
-    def build_steps(self, option):
-        steps = option['calls']
+    def build_steps(self, steps):
         # 多个步骤
         if isinstance(steps, list):
             return {
@@ -565,9 +585,6 @@ class Boot(YamlBoot):
         args = dict(zip(names, vals))
         return self.build_dict_args(args, 'call')
 
-    def script(self, options):
-        self.build_template(options, self.build_script)
-
     def build_script(self, option, default_image="docker/whalesay:latest"):
         image = get_and_del_dict_item(option, "image", default_image)
         # 命令
@@ -602,15 +619,6 @@ class Boot(YamlBoot):
             return self.build_script(option, default_image=f"python:alpine{version}")
         self.build_template(options, builder)
 
-    # 暂停
-    def suspend(self, options):
-        if not isinstance(options, dict):
-            options = {
-                # 模板名: 选项
-                'wait': options
-            }
-        self.build_template(options, self.build_suspend)
-
     def build_suspend(self, option):
         if option is None:
             return {
@@ -628,21 +636,20 @@ class Boot(YamlBoot):
         }
 
     # 流程资源文件
-    def apply(self, option, name):
-        return self.do_res_action("apply", name, option)
+    def build_apply(self, option):
+        return self.build_res_action("apply", option)
 
     # 删除文件
-    def delete(self, option, name):
-        return self.do_res_action("delete", name, option)
+    def build_delete(self, option):
+        return self.build_res_action("delete", option)
 
     # 操作资源
-    def do_res_action(self, action, name, option):
+    def build_res_action(self, action, option):
         # 源码
         src = get_and_del_dict_item(option, "manifest")
         if 'file' in option:
             src = read_file(get_and_del_dict_item(option, "file"))
         return {
-            "name": name,
             "resource": {
                 "action": action,
                 "manifest": src
@@ -650,7 +657,7 @@ class Boot(YamlBoot):
         }
 
     # dag 依赖关系
-    def dag(self, deps, name):
+    def build_dag(self, deps):
         tasks = []
         if isinstance(deps, str):
             deps = [deps]
@@ -678,12 +685,11 @@ class Boot(YamlBoot):
                     }
                     tasks.append(task)
 
-        return [{
-            "name": name,
+        return {
             "dag": {
                 "tasks": tasks
             }
-        }]
+        }
 
 # cli入口
 def main():
