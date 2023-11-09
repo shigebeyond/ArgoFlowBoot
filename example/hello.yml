@@ -1,0 +1,14 @@
+- flow(hello):
+    - templates:
+        whalesay(msg):
+            container:
+              command: cowsay $msg
+        main(): # 工作流入口必然是main
+            steps:
+              - whalesay(hello1)
+              - whalesay(hello2)
+              - whalesay(hello3)
+
+
+
+

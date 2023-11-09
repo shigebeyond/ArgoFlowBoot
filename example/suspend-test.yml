@@ -1,0 +1,20 @@
+# https://argoproj.github.io/argo-workflows/walk-through/suspending/
+- flow(suspend-test):
+    - templates:
+        approve():
+            suspend:
+        delay():
+            suspend: 20 # Must be a string. Default unit is seconds. Could also be a Duration, e.g.: "2m", "6h"
+        whalesay():
+            container:
+                commmand: cowsay "hello world"
+        main(): # 工作流入口必然是main
+            steps:
+                - whalesay()
+                - approve()
+                - delay() # 暂停
+                - whalesay() # 恢复
+
+
+
+

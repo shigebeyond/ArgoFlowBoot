@@ -1,0 +1,26 @@
+# https://argoproj.github.io/argo-workflows/walk-through/exit-handlers/
+- flow(exit-test):
+    - templates:
+        send-email():
+            container:
+                command: "echo send e-mail: {{workflow.name}} {{workflow.status}} {{workflow.duration}}"
+        celebrate():
+            container:
+                commmand: echo hooray!
+        cry():
+            container:
+                commmand: echo boohoo!
+        exit(): # 退出处理
+            steps:
+                - send-email()
+                - template: celebrate
+                  when: "{{workflow.status}} == Succeeded"
+                - template: cry
+                  when: "{{workflow.status}} != Succeeded"
+        main(): # 工作流入口必然是main
+            container:
+                command: echo intentional failure; exit 1
+
+
+
+

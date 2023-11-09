@@ -1,0 +1,23 @@
+# https://argoproj.github.io/argo-workflows/walk-through/recursion/
+- flow(recursion-test):
+    - templates:
+        flip-coin(): # python随机返回 heads 或 tails -- Return heads or tails based on a random number
+            python3.6:
+                source: |
+                    import random
+                    result = "heads" if random.randint(0,1) == 0 else "tails"
+                    print(result)
+        heads():
+            container:
+                commmand: echo "it was heads"
+        main(): # 工作流入口必然是main
+            steps:
+                - flip-coin()
+                - template: heads() # call heads template if "heads"
+                  when: "${flip-coin.result} == heads"
+                - template: flip-coin() # keep flipping coins if "tails"
+                  when: "${flip-coin.result} == tails"
+
+
+
+

@@ -1,0 +1,39 @@
+# https://argoproj.github.io/argo-workflows/walk-through/conditionals/
+- flow(when-test):
+    - templates:
+        flip-coin(): # python随机返回 heads 或 tails -- Return heads or tails based on a random number
+            python3.6:
+                source: |
+                    import random
+                    result = "heads" if random.randint(0,1) == 0 else "tails"
+                    print(result)
+        heads():
+            container:
+                commmand: echo "it was heads"
+        tails():
+            container:
+                commmand: echo "it was tails"
+        heads-tails-or-twice-tails():
+            container:
+                commmand: echo "it was heads the first flip and tails the second. Or it was two times tails."
+        main(): # 工作流入口必然是main
+            steps:
+                - flip-coin()
+                - template: heads() # call heads template if "heads"
+                  when: "${flip-coin.result} == heads"
+                - template: tails() # call tails template if "tails"
+                  when: "${flip-coin.result} == tails"
+                - flip-coin()
+                - template: heads-tails-or-twice-tails()
+                  # call heads template if first flip was "heads" and second was "tails" OR both were "tails"
+                  when: |
+                      ( ${flip-coin.result} == heads && ${flip-coin2.result} == tails) ||
+                      ( ${flip-coin.result} == tails && ${flip-coin2.result} == tails )
+                - template: heads() # call heads template if ~ "hea"
+                  when: "${flip-coin2.result} =~ hea"
+                - template: tails() # call heads template if ~ "tai"
+                  when: "${flip-coin2.result} =~ tai"
+
+
+
+

@@ -46,7 +46,7 @@ class Boot(YamlBoot):
         # flow作用域的属性，跳出flow时就清空
         self._flow = '' # 流程名
         self._labels = {}  # 记录标签
-        self._args = {}  # 记录流程级传参
+        self._args = None  # 记录流程级传参
         self._templates = {}  # 记录模板，key是模板名，value是模板定义
         self._template_inputs = {} # 记录模板的输入参数名
         self._template_outputs = {} # 记录模板的输出参数名
@@ -77,7 +77,7 @@ class Boot(YamlBoot):
         self._flow = None  # 流程名
         set_var('flow', None)
         self._labels = {}  # 记录标签
-        self._args = {}  # 记录流程级传参
+        self._args = None  # 记录流程级传参
         self._templates = {}  # 记录模板，key是模板名，value是模板定义
         self._template_inputs = {} # 记录模板的输入参数名
         self._template_outputs = {} # 记录模板的输出参数名
@@ -154,20 +154,25 @@ class Boot(YamlBoot):
 
     def build_flow(self):
         # 入口为main
-        ep = "main"
-        if ep not in self._templates:
+        entrypoint = "main"
+        if entrypoint not in self._templates:
             raise Exception("未定义入口模板: main")
+        # 退出处理
+        exit_handler = None
+        if 'exit' in self._templates:
+            exit_handler = 'exit'
 
         yaml = {
+            "apiVersion": "argoproj.io/v1alpha1",
+            "kind": "Workflow",
             "metadata": {
-                "apiVersion": "argoproj.io/v1alpha1",
-                "kind": "Workflow",
                 "generateName": self._flow + '-',
                 "labels": self.build_labels()
             },
             "spec": {
                 "arguments": self._args,
-                "entrypoint": ep,
+                "entrypoint": entrypoint,
+                "onExit": exit_handler,
                 "volumeClaimTemplates": self._vc_templates,
                 "templates": list(self._templates.values()),
                 "ttlStrategy": {
@@ -178,6 +183,7 @@ class Boot(YamlBoot):
                 }
             }
         }
+        del_dict_none_item(yaml["spec"])
         self.save_yaml(yaml)
 
     def build_volume_mounts(self):
@@ -245,8 +251,21 @@ class Boot(YamlBoot):
                 option = {
                     'path': option
                 }
+            option['_has_source'] = self.check_artifact_has_source(option)
             self._arts[name] = option # 记录工件映射的路径
             set_var('@'+name, option['path']) # 设置变量
+
+    def check_artifact_has_source(self, art):
+        '''
+        检查工件是否自带输入，就是检查是否有两层以上的属性，如s3/http有下一层
+           参考 https://argoproj.github.io/argo-workflows/walk-through/hardwired-artifacts/
+        :param art:
+        :return:
+        '''
+        for k, v in art.items():
+            if isinstance(v, dict):
+                return True
+        return False
 
     @replace_var_on_params
     def args(self, args):
@@ -266,7 +285,7 @@ class Boot(YamlBoot):
         # 逐个匹配模板类型，并调用对应的模板主体构建器
         for type, builder in self.template_body_builders.items():
             if type in option:
-                return builder(option[type])
+                return builder(get_and_del_dict_item(option, type))
 
         return None
 
@@ -329,7 +348,8 @@ class Boot(YamlBoot):
             "name": name,
             "inputs": inputs,
             "outputs": outputs,
-            **body
+            **body,
+            **option
         }
         # pop_vars_stack() # 变量出栈
         del_dict_none_item(tpl)
@@ -439,9 +459,11 @@ class Boot(YamlBoot):
             }
 
         # 4 最后用全局配的
+        art = self._arts[key].copy()
+        del art['_has_source']
         return {
             "name": key,
-            **self._arts[key]
+            **art
         }
 
     # 构建模板的输入参数
@@ -606,7 +628,7 @@ class Boot(YamlBoot):
         return wrapper
 
     def build_suspend(self, option):
-        if option is None:
+        if not option:
             return {
                 "suspend": {}
             }

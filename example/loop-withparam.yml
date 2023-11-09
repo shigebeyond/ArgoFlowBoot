@@ -1,7 +1,7 @@
 # https://argoproj.github.io/argo-workflows/walk-through/loops/
 - flow(loop-withparam):
     - args:
-        os-list: |
+        os-list: | # json
                 [
                   { "image": "debian", "tag": "9.1" },
                   { "image": "debian", "tag": "8.9" },
@@ -16,7 +16,7 @@
         main(os-list): # 工作流入口必然是main，要放最后
             steps:
               - template: cat-os-release({{item.image}},{{item.tag}})
-                withParam: $os-list
+                withParam: $os-list # parameter specifies the list to iterate over
 
 
 

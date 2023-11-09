@@ -1,0 +1,25 @@
+# https://argoproj.github.io/argo-workflows/walk-through/loops/
+- flow(loop-result):
+    - templates:
+        print-json-entry(index): # 单词迭代的处理
+            script: # The output must be a valid JSON
+              source: |
+                    cat <<EOF
+                    {
+                      "input": "$index",
+                      "transformed-input": "$index.jpeg"
+                    }
+                    EOF
+        access-aggregate-output(aggregate-results): # 聚合结果
+            script:
+              source: |
+                    echo 'aggregate-results: "$aggregate-results"'
+        main(): # 工作流入口必然是main，要放最后
+            steps:
+              - template: print-json-entry({{item}})
+                withParam: '[1, 2, 3]' # list json
+              # If the value of each loop iteration isn't a valid JSON, you get a JSON parse error:
+              - access-aggregate-output(${print-json-entry.result})
+
+
+
