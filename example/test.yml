@@ -1,5 +1,5 @@
 - flow(test):
-    - vc: # 共享的pvc, 所有任务的容器都会挂载
+    - vc_templates: # 共享的pvc, 所有任务的容器都会挂载
         - work:/work:1Gi # pvc名:挂载路径:空间大小
     - artifacts: # 共享文件(工件), 所有任务都可读写
         test: /tmp/test.txt # 工件名: 挂载路径

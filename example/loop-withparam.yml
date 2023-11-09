@@ -1,0 +1,22 @@
+# https://argoproj.github.io/argo-workflows/walk-through/loops/
+- flow(loop-withparam):
+    - args:
+        os-list: |
+                [
+                  { "image": "debian", "tag": "9.1" },
+                  { "image": "debian", "tag": "8.9" },
+                  { "image": "alpine", "tag": "3.6" },
+                  { "image": "ubuntu", "tag": "17.10" }
+                ]
+    - templates:
+        cat-os-release(image,tag):
+            container:
+              image: $image:$tag
+              command: cat /etc/os-release
+        main(os-list): # 工作流入口必然是main，要放最后
+            steps:
+              - template: cat-os-release({{item.image}},{{item.tag}})
+                withParam: $os-list
+
+
+

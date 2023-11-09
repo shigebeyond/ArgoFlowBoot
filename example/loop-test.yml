@@ -1,0 +1,18 @@
+# https://argoproj.github.io/argo-workflows/walk-through/loops/
+- flow(loop-test):
+    - templates:
+        whalesay(msg):
+            container:
+              command: cowsay $msg
+        main(): # 工作流入口必然是main，要放最后
+            steps:
+              - template: whalesay({{item}})
+#              - template:
+#                  - whalesay
+#                  - '{{item}}'
+                withItems: # invoke whalesay once for each item in parallel
+                  - hello world   # item 1
+                  - goodbye world # item 2
+
+
+

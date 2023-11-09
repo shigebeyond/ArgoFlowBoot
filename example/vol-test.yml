@@ -1,0 +1,18 @@
+# https://argoproj.github.io/argo-workflows/walk-through/volumes/
+- flow(vol-test):
+    - vc_templates: # 共享的pvc, 所有任务的容器都会挂载
+        - workdir:/mnt/vol:1Gi # pvc名:挂载路径:空间大小
+    - templates:
+        whalesay():
+            container:
+              command: echo generating message in volume; cowsay hello world | tee $workdir/hello_world.txt
+        print-message(msg):
+            container:
+              command: echo getting message from volume; cat $workdir/hello_world.txt
+        main(): # 工作流入口必然是main，要放最后
+            steps:
+              - whalesay()
+              - print-message()
+
+
+

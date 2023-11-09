@@ -28,7 +28,7 @@ class Boot(YamlBoot):
             'flow': self.flow,
             'labels': self.labels,
             'args': self.args,
-            'vc': self.vc,
+            'vc_templates': self.vc_templates,
             'artifacts': self.artifacts,
             'templates': self.templates,
         }
@@ -186,7 +186,7 @@ class Boot(YamlBoot):
         return [{ "name": k, "mountPath": v } for k, v in self._vc_mounts.items()]
 
     @replace_var_on_params
-    def vc(self, mounts):
+    def vc_templates(self, mounts):
         '''
         构建持久卷声明
         :params mounts 多行，格式为
@@ -226,6 +226,7 @@ class Boot(YamlBoot):
 
             # 3 记录挂载路径
             self._vc_mounts[name] = mount_path
+            set_var(name, mount_path) # 设变量
 
     @replace_var_on_params
     def artifacts(self, arts):
@@ -256,57 +257,6 @@ class Boot(YamlBoot):
         '''
         self._args = self.build_dict_args(args, 'flow')
 
-    def ref_pod_field(self, field):
-        '''
-        在给环境变量赋时值，注入Pod信息
-          参考 https://blog.csdn.net/skh2015java/article/details/109229107
-        :param field Pod信息字段，仅支持 metadata.name, metadata.namespace, metadata.uid, spec.nodeName, spec.serviceAccountName, status.hostIP, status.podIP, status.podIPs
-        '''
-        return {
-            "fieldRef": {
-                "fieldPath": field
-            }
-        }
-
-    def ref_resource_field(self, field):
-        '''
-        在给环境变量赋值时，注入容器资源信息
-          参考 https://blog.csdn.net/skh2015java/article/details/109229107
-        :param field 容器资源信息字段，仅支持 requests.cpu, requests.memory, limits.cpu, limits.memory
-        '''
-        return {
-            "resourceFieldRef": {
-                "containerName": self._curr_container,
-                "resource": field
-            }
-        }
-
-    def ref_config(self, key):
-        '''
-        在给环境变量赋值时，注入配置信息
-        :param key
-        '''
-        name, key = key.split('.')
-        return {
-            "configMapKeyRef":{
-              "name": name, # The ConfigMap this value comes from.
-              "key": key # The key to fetch.
-            }
-        }
-
-    def ref_secret(self, key):
-        '''
-        在给环境变量赋值时，注入secret信息
-        :param key
-        '''
-        name, key = key.split('.')
-        return {
-            "secretKeyRef":{
-              "name": name, # The Secret this value comes from.
-              "key": key # The key to fetch.
-            }
-        }
-
     def templates(self, options):
         # 模板名:模板配置
         for name, option in options.items():
@@ -320,10 +270,27 @@ class Boot(YamlBoot):
 
         return None
 
+    # 获得默认镜像
+    def get_default_image(self, option):
+        cmd = option.get('command')
+        if cmd is None:
+            return 'alpine'
+
+        cmd = cmd.strip()
+        if cmd.startswith('python'):
+            version = re.search(r'^python([\d\.]+)?', cmd).group(1) or '3.6' # 从命令中获得python版本，缺省为3.6
+            return f"python:alpine{version}"
+
+        if 'cowsay ' in cmd:
+            return 'docker/whalesay'
+
+        return 'alpine'
+
+    # 构建容器模板
     def build_container(self, option):
         ret = {
             "container": {
-                "image": get_and_del_dict_item(option, "image", "alpine:3.6"),
+                "image": get_and_del_dict_item(option, "image", self.get_default_image(option)),
                 "command": self.fix_command(get_and_del_dict_item(option, "command")),
                 "args": self.fix_command_args(get_and_del_dict_item(option, "args")),
                 "volumeMounts": self.build_volume_mounts(),
@@ -347,7 +314,7 @@ class Boot(YamlBoot):
         self._template_inputs[name] = args # 记录模板的输入参数名
         # push_vars_stack() # 变量入栈
         inputs = self.build_list_args(args, 'inputs') # 构建输入，会增加变量
-        if 'steps' not in option: # steps延迟替换变量
+        if 'steps' not in option: # steps延迟替换变量, 因为下一步的输入变量会依赖上一步的输出
             option = replace_var(option, False) # 替换变量
         # 构建输出
         out = get_and_del_dict_item(option, 'out')
@@ -537,35 +504,37 @@ class Boot(YamlBoot):
         # 单个步骤
         return self.build_step(steps)
 
-    # 构建step
+    # 构建step -- steps延迟替换变量, 因为下一步的输入变量会依赖上一步的输出
     #@replace_var_on_params
     def build_step(self, step, name = None):
         # list要递归，因为steps中--代表顺序执行，- 代表并行执行，也就是可能有多层list，要递归调用
         if isinstance(step, list):
             return list(map(self.build_step, step))
 
-        # dict: template+when
-        when = None
-        if isinstance(step, dict):
-            when = step['when']
-            step = step['template']
-        # 解析模板
+        # steps延迟替换变量, 因为下一步的输入变量会依赖上一步的输出
         step = replace_var(step)
-        template, args = parse_func(step, True)
+        # 构建dict: template+when
+        if isinstance(step, str):
+            step = {
+                'template': step
+            }
+        # 解析模板
+        template = step['template']
+        if isinstance(template, list): # 列表类型: 第一个是模板名, 其他为参数
+            args = template[1:]
+            template = template[0]
+        else: # 字符串类型: 函数调用格式
+            template, args = parse_func(template, True)
         if name is None:
             name = self.namer.build_name(template) # 生成步骤名, 不缓存
         # 拼接步骤
-        ret = {
-            "name": name,
-            "template": template
-        }
-        if when:
-            ret['when'] = when
+        step["name"] = name
+        step["template"] = template
         if args:
-            ret['arguments'] = self.build_step_call_args(template, args)
+            step['arguments'] = self.build_step_call_args(template, args)
         # 输出变量
         self.build_step_out_vars(template, name, 'steps')
-        return ret
+        return step
 
     def build_step_out_vars(self, tpl_name, step_name, prefix):
         '''
@@ -603,14 +572,13 @@ class Boot(YamlBoot):
         args = dict(zip(names, vals))
         return self.build_dict_args(args, 'call')
 
-    def build_script(self, option, default_image="docker/whalesay:latest"):
+    def build_script(self, option):
         '''
         构建script模板，参考 https://argoproj.github.io/argo-workflows/walk-through/scripts-and-results/
         :param option:
-        :param default_image:
         :return:
         '''
-        image = get_and_del_dict_item(option, "image", default_image)
+        image = get_and_del_dict_item(option, "image", self.get_default_image(option))
         # 命令
         cmd = get_and_del_dict_item(option, "command", "bash")
         if isinstance(cmd, str):
@@ -631,27 +599,10 @@ class Boot(YamlBoot):
         del_dict_none_item(ret["script"])
         return ret
 
-    # 构建容器中的环境变量
-    def build_env(self, env):
-        if env is None or len(env) == 0:
-            return None
-
-        ret = []
-        for key, val in env.items():
-            item = {
-                "name": key,
-            }
-            if isinstance(val, (str, int, float)):
-                item["value"] = str(val)
-            else:
-                item["valueFrom"] = val
-            ret.append(item)
-        return ret
-
     def wrap_build_python(self, version):
         def wrapper(option):
-            option['command'] = 'python'
-            return self.build_script(option, default_image=f"python:alpine{version}")
+            option['command'] = f'python{version}'
+            return self.build_script(option)
         return wrapper
 
     def build_suspend(self, option):
@@ -730,6 +681,75 @@ class Boot(YamlBoot):
         return {
             "dag": {
                 "tasks": tasks
+            }
+        }
+
+    # --------------------- 抄 K8sBoot 的实现 ---------------------
+    # 构建容器中的环境变量
+    def build_env(self, env):
+        if env is None or len(env) == 0:
+            return None
+
+        ret = []
+        for key, val in env.items():
+            item = {
+                "name": key,
+            }
+            if isinstance(val, (str, int, float)):
+                item["value"] = str(val)
+            else:
+                item["valueFrom"] = val
+            ret.append(item)
+        return ret
+
+    def ref_pod_field(self, field):
+        '''
+        在给环境变量赋时值，注入Pod信息
+          参考 https://blog.csdn.net/skh2015java/article/details/109229107
+        :param field Pod信息字段，仅支持 metadata.name, metadata.namespace, metadata.uid, spec.nodeName, spec.serviceAccountName, status.hostIP, status.podIP, status.podIPs
+        '''
+        return {
+            "fieldRef": {
+                "fieldPath": field
+            }
+        }
+
+    def ref_resource_field(self, field):
+        '''
+        在给环境变量赋值时，注入容器资源信息
+          参考 https://blog.csdn.net/skh2015java/article/details/109229107
+        :param field 容器资源信息字段，仅支持 requests.cpu, requests.memory, limits.cpu, limits.memory
+        '''
+        return {
+            "resourceFieldRef": {
+                "containerName": self._curr_container,
+                "resource": field
+            }
+        }
+
+    def ref_config(self, key):
+        '''
+        在给环境变量赋值时，注入配置信息
+        :param key
+        '''
+        name, key = key.split('.')
+        return {
+            "configMapKeyRef":{
+              "name": name, # The ConfigMap this value comes from.
+              "key": key # The key to fetch.
+            }
+        }
+
+    def ref_secret(self, key):
+        '''
+        在给环境变量赋值时，注入secret信息
+        :param key
+        '''
+        name, key = key.split('.')
+        return {
+            "secretKeyRef":{
+              "name": name, # The Secret this value comes from.
+              "key": key # The key to fetch.
             }
         }
 

@@ -3,7 +3,6 @@
     - templates:
         whalesay(msg): #
             container:
-              image: docker/whalesay
               command: cowsay $msg
         main(): # 工作流入口必然是main，要放最后
             steps:

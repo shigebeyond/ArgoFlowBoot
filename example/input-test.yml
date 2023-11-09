@@ -5,7 +5,6 @@
     - templates:
         main(msg): # 工作流入口必然是main
             container:
-              image: docker/whalesay:latest
               command: cowsay $msg
 
 

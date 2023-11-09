@@ -1,0 +1,20 @@
+# https://argoproj.github.io/argo-workflows/walk-through/loops/
+- flow(loop-withparam2):
+    - templates:
+        gen-number-list(): # 生成随机秒数
+            python3.6:
+              source: |
+                    import json
+                    import sys
+                    json.dump([i for i in range(20, 31)], sys.stdout)
+        sleep(sec): # 睡n秒
+            container:
+              command: echo sleeping for $sec seconds; sleep $sec; echo done
+        main(): # 工作流入口必然是main，要放最后
+            steps:
+              - gen-number-list()
+              - template: sleep({{item}})
+                withParam: ${gen-number-list.result}
+
+
+

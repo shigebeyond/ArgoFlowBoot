@@ -3,16 +3,14 @@
     - args: # 流程级参数
         msg: hello world
     - templates:
-        whalesay: # 工作流入口必然是main
+        whalesay:
             container:
-              image: docker/whalesay:latest
               command: echo -n hello world > /tmp/hello_world.txt
             out:
               hello:
                 path: /tmp/hello_world.txt
         print-message(msg):
             container:
-              image: docker/whalesay:latest
               command: cowsay $msg
         main(): # 工作流入口必然是main，要放最后
             steps:
