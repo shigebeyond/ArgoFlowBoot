@@ -1,15 +1,14 @@
-# https://github.com/argoproj/argo-workflows/tree/master/examples/ci.yaml
-- flow(ci-test):
+# argo-workflows/examples/ci.yaml
+- flow(ci):
     - args:
         revision: cfe12d6
-    - vc_templates: # 共享的pvc, 所有任务的容器都会挂载
-       - workdir:/go:1Gi # pvc名:挂载路径:空间大小
-    - artifacts: # 共享文件(工件), 所有任务都可读写
-        code:
+        '@code': # 共享文件(工件)
             path: /go/src/github.com/golang/example
             git:
               repo: https://github.com/golang/example.git
               revision: "{{inputs.parameters.revision}}"
+    - vc_templates: # 共享的pvc, 所有任务的容器都会挂载
+       - workdir:/go:1Gi # pvc名:挂载路径:空间大小
     - templates:
         build-golang-example(revision,@code):
             container:
@@ -27,7 +26,7 @@
                     /go/src/github.com/golang/example/hello/hello
         main(revision): # 工作流入口必然是main
             steps:
-              - build-golang-example($revision,$@code)
+              - build-golang-example($revision)
               - template: run-hello({{item.image}}:{{item.tag}})
                 withItems:
                     - { image: 'debian', tag: '9.1' }

@@ -1,0 +1,31 @@
+# argo-workflows/examples/input-artifact-s3.yaml
+- flow(input-artifact-s3):
+    - args: # 流程级参数
+        '@my-art': # 共享文件(工件)
+            path: /my-artifact
+            azure:
+              # For most people, the endpoint is in the form https://<account-name>.blob.core.windows.net.
+              # In sovereign clouds, or Azure Stack clouds, the endpoint may be different.
+              endpoint: https://myazurestorageaccountname.blob.core.windows.net
+              # The name of the container within the storage account.
+              container: my-container
+              # The path (within the container) to the artifact
+              blob: path/in/container
+              # accountKeySecret is a secret selector. It references the k8s secret named
+              # 'my-azure-credentials'. This secret is expected to have the key
+              # 'accountKey', containing the Azure Storage account name and access key.
+              accountKeySecret:
+                name: my-azure-credentials
+                key: accountKey
+              # Optional: set UseSDKCreds to true and skip setting accountKeySecret if
+              # you are using environment variables to configure, or a Managed Identity.
+              # useSDKCreds: true
+    - templates:
+        main(@my-art):
+            container:
+              command: ls -l ${@my-art.path}
+
+
+
+
+

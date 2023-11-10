@@ -12,6 +12,20 @@ from pyutilb.log import log
 from ArgoFlowBoot.task_namer import *
 
 '''
+代理工件对象, 并改写tostring(), 以便支持
+1  ${@art.path} 输出工件对象属性
+2. $@art 输出如 {{inputs.artifacts.source}}
+'''
+class ArtifactProxy(dict):
+
+    def __init__(self, data, repr):
+        super().__init__(data)
+        self.repr = repr # 如 {{inputs.artifacts.source}}
+
+    def __repr__(self):
+        return self.repr
+
+'''
 argo flow配置生成的基于yaml的启动器
 '''
 class Boot(YamlBoot):
@@ -27,9 +41,9 @@ class Boot(YamlBoot):
         actions = {
             'flow': self.flow,
             'labels': self.labels,
+            'spec': self.spec,
             'args': self.args,
             'vc_templates': self.vc_templates,
-            'artifacts': self.artifacts,
             'templates': self.templates,
         }
         self.add_actions(actions)
@@ -46,13 +60,13 @@ class Boot(YamlBoot):
         # flow作用域的属性，跳出flow时就清空
         self._flow = '' # 流程名
         self._labels = {}  # 记录标签
+        self._spec = {}  # 记录流程其他配置
         self._args = None  # 记录流程级传参
         self._templates = {}  # 记录模板，key是模板名，value是模板定义
         self._template_inputs = {} # 记录模板的输入参数名
         self._template_outputs = {} # 记录模板的输出参数名
-        self._vc_templates = [] # 记录vs模板
+        self._vc_templates = None # 记录vs模板
         self._vc_mounts = {} # 记录vs挂载路径，key是vc名，value是挂载路径
-        self._arts = {} # 记录工件信息，key是工件名，value是挂载路径+存储信息
 
         # 模板主题构建器
         self.template_body_builders = {
@@ -77,13 +91,13 @@ class Boot(YamlBoot):
         self._flow = None  # 流程名
         set_var('flow', None)
         self._labels = {}  # 记录标签
+        self._spec = {}  # 记录流程其他配置
         self._args = None  # 记录流程级传参
         self._templates = {}  # 记录模板，key是模板名，value是模板定义
         self._template_inputs = {} # 记录模板的输入参数名
         self._template_outputs = {} # 记录模板的输出参数名
-        self._vc_templates = [] # 记录vs模板
+        self._vc_templates = None # 记录vs模板
         self._vc_mounts = {} # 记录vs挂载路径，key是vc名，value是挂载路径
-        self._arts = {} # 记录工件信息，key是工件名，value是挂载路径+存储信息
 
     def save_yaml(self, data):
         '''
@@ -99,7 +113,7 @@ class Boot(YamlBoot):
             data = list(map(yaml.dump, data))
             data = "\n---\n\n".join(data)
         elif not isinstance(data, str):
-            data = yaml.dump(data)
+            data = yaml.dump(data, sort_keys=False)
         # 创建目录
         if not os.path.exists(self.output_dir):
             os.makedirs(self.output_dir)
@@ -170,9 +184,10 @@ class Boot(YamlBoot):
                 "labels": self.build_labels()
             },
             "spec": {
-                "arguments": self._args,
                 "entrypoint": entrypoint,
                 "onExit": exit_handler,
+                "arguments": self._args,
+                **self._spec,
                 "volumeClaimTemplates": self._vc_templates,
                 "templates": list(self._templates.values()),
                 "ttlStrategy": {
@@ -203,6 +218,7 @@ class Boot(YamlBoot):
         if isinstance(mounts, str):
             mounts = [mounts]
 
+        self._vc_templates = []
         for mount in mounts:
             # 1 默认名为work
             if ':' not in mount:
@@ -234,46 +250,10 @@ class Boot(YamlBoot):
             self._vc_mounts[name] = mount_path
             set_var(name, mount_path) # 设变量
 
+    # 流程的其他配置
     @replace_var_on_params
-    def artifacts(self, arts):
-        '''
-        共享文件(工件), 所有任务都可读写
-        :param option: dict{mount, repo}
-                      mount属性: 指定工件要挂载的容器内路径
-                      repo属性: 存储信息，参考 ArgoFlowBoot/example/artifact-type.yml，支持自带文件存储信息(git/HTTP/GCS/S3)
-                      https://argoproj.github.io/argo-workflows/walk-through/artifacts/
-                      https://argoproj.github.io/argo-workflows/walk-through/hardwired-artifacts/
-        :return:
-        '''
-        if not arts:
-            return None
-
-        for name, option in arts.items():
-            if isinstance(option, str):
-                option = {
-                    'path': option
-                }
-            set_var('@'+name, option) # 设置工件变量: 没有拆分挂载路径+存储信息
-            self._arts[name] = self.split_artifact_mount_and_location(option) # 分开记录工件挂载路径+存储信息
-
-    def split_artifact_mount_and_location(self, art):
-        '''
-        拆分工件的挂载路径+存储信息(dict, 如s3/http有下一层属性)
-           参考 https://argoproj.github.io/argo-workflows/walk-through/hardwired-artifacts/
-        :param art:
-        :return:
-        '''
-        mount = {}
-        location = {}
-        for k, v in art.items():
-            if isinstance(v, dict):
-                location[k] = v
-            else:
-                mount[k] = v
-        return {
-            'mount': mount,
-            'location': location
-        }
+    def spec(self, option):
+        self._spec = option
 
     @replace_var_on_params
     def args(self, args):
@@ -282,7 +262,7 @@ class Boot(YamlBoot):
         :param args:
         :return:
         '''
-        self._args = self.build_dict_args(args, 'flow')
+        self._args = self.build_dict_args(args, 'flow-args')
 
     def templates(self, options):
         # 模板名:模板配置
@@ -339,7 +319,7 @@ class Boot(YamlBoot):
         name, args = parse_func(name, True)
         # 构建输入
         self._template_inputs[name] = args # 记录模板的输入参数名
-        # push_vars_stack() # 变量入栈
+        push_vars_stack() # 变量入栈
         inputs = self.build_list_args(args, 'inputs') # 构建输入，会增加变量
         if 'steps' not in option: # steps延迟替换变量, 因为下一步的输入变量会依赖上一步的输出
             option = replace_var(option, False) # 替换变量
@@ -355,11 +335,11 @@ class Boot(YamlBoot):
         tpl = {
             "name": name,
             "inputs": inputs,
-            "outputs": outputs,
             **body,
+            "outputs": outputs,
             **option
         }
-        # pop_vars_stack() # 变量出栈
+        pop_vars_stack() # 变量出栈
         del_dict_none_item(tpl)
         self._templates[name] = tpl
 
@@ -383,8 +363,8 @@ class Boot(YamlBoot):
                 arts[k] = v
             else: # parameters
                 params[k] = v
-                if type == 'inputs' or type == 'flow':
-                    set_var(k, '{{inputs.parameters.' + k + '}}') # 设变量
+            # 设输入变量
+            self.build_input_vars(type, k, v)
         # 构建参数
         ret = {
             "parameters": self.build_params(params),
@@ -392,6 +372,17 @@ class Boot(YamlBoot):
         }
         del_dict_none_item(ret)
         return ret
+
+    # 构建输入变量
+    def build_input_vars(self, type, k, v=None):
+        if k.startswith('@'):  # artifacts
+            if type == 'flow-args' and v is not None:
+                set_var(k, ArtifactProxy(v, '{{inputs.artifacts.' + k.replace('@', '') + '}}'))
+            elif type == 'inputs' and get_var(k) is None:
+                set_var(k, '{{inputs.artifacts.' + k.replace('@', '') + '}}')  # {{inputs.artifacts.source}}
+        else:  # parameters
+            if type == 'flow-args' or type == 'inputs':
+                set_var(k, '{{inputs.parameters.' + k + '}}') # {{inputs.parameters.message}}
 
     def build_list_args(self, args: list, type: str):
         '''
@@ -413,8 +404,8 @@ class Boot(YamlBoot):
                 arts.append(arg)
             else: # parameters
                 params.append(arg)
-                if type == 'inputs' or type == 'flow':
-                    set_var(arg, '{{inputs.parameters.' + arg + '}}')  # 设变量
+            # 设输入变量
+            self.build_input_vars(type, arg)
         # 构建参数
         ret = {
             "parameters": self.build_params(params),
@@ -423,8 +414,15 @@ class Boot(YamlBoot):
         del_dict_none_item(ret)
         return ret
 
-    # 构建模板的输入参数
     def build_artifacts(self, option, type=None):
+        '''
+        构建模板的工件参数
+        :param option: dict(参数名, 工件信息)，其中工件信息包含挂载路径+存储信息，参考 ArgoFlowBoot/example/artifact-type.yml，支持自带文件存储信息(git/HTTP/GCS/S3)
+                      https://argoproj.github.io/argo-workflows/walk-through/artifacts/
+                      https://argoproj.github.io/argo-workflows/walk-through/hardwired-artifacts/
+        :param type: 参数类型: inputs/outputs/flow/call(调用模板)
+        :return:
+        '''
         if not option:
             return None
 
@@ -440,14 +438,13 @@ class Boot(YamlBoot):
         '''
         构建工件
         :param key:
-        :param value:
-        :param type
+        :param value: 挂载路径+存储信息，参考 ArgoFlowBoot/example/artifact-type.yml，支持自带文件存储信息(git/HTTP/GCS/S3)
+                      https://argoproj.github.io/argo-workflows/walk-through/artifacts/
+                      https://argoproj.github.io/argo-workflows/walk-through/hardwired-artifacts/
+        :param type: 参数类型: inputs/outputs/flow/call(调用模板)
         :return:
         '''
         key = key.replace('@', '')
-        # 标记被流程级参数引用
-        if type == 'flow':
-            self._arts[key]['flow_ref'] = True
 
         # 1 有明细配置dict
         if isinstance(value, dict):
@@ -470,20 +467,19 @@ class Boot(YamlBoot):
                 "path": value
             }
 
-        # 4 最后用全局配的
-        art = self._arts[key]
-        ret = {
+        # 4 如果用户没填，则默认用流程级同名参数
+        return {
             "name": key,
-            **art['mount']
         }
-
-        # 如果是流程级参数 或 (其他参数但没有被流程级参数引用), 则带上存储信息
-        if type == 'flow' or not art.get('flow_ref'):
-            ret.update(art.get('location', {}))
-        return ret
 
     # 构建模板的输入参数
     def build_params(self, option):
+        '''
+
+        :param option:
+        :param type: 参数类型: inputs/outputs/flow/call(调用模板)
+        :return:
+        '''
         if not option:
             return None
 
@@ -584,10 +580,10 @@ class Boot(YamlBoot):
         if args:
             step['arguments'] = self.build_step_call_args(template, args)
         # 输出变量
-        self.build_step_out_vars(template, name, type)
+        self.build_step_output_vars(template, name, type)
         return step
 
-    def build_step_out_vars(self, tpl_name, step_name, type):
+    def build_step_output_vars(self, tpl_name, step_name, type):
         '''
         构建steps调用的输出变量
         :param tpl_name:
@@ -617,8 +613,8 @@ class Boot(YamlBoot):
     def build_step_call_args(self, tpl_name, vals):
         # 输入参数名
         names = self._template_inputs[tpl_name]
-        if len(names) != len(vals):
-            raise Exception(f"调用模板{tpl_name}的参数个数与声明的参数个数不一致")
+        # if len(names) != len(vals):
+        #     raise Exception(f"调用模板{tpl_name}的参数个数与声明的参数个数不一致")
 
         args = dict(zip(names, vals))
         return self.build_dict_args(args, 'call')

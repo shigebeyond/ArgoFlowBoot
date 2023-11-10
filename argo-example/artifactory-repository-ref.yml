@@ -1,0 +1,16 @@
+# argo-workflows/examples/artifactory-repository-ref.yaml
+- flow(artifactory-repository-ref):
+    - spec:
+        artifactRepositoryRef:
+          key: my-key
+    - templates:
+        main():
+            container:
+              command: cowsay hello world | tee /tmp/hello_world.txt
+            out:
+              '@hello_world': /tmp/hello_world.txt
+
+
+
+
+
