@@ -505,7 +505,7 @@ class Boot(YamlBoot):
             return [args]
         return args
 
-    def build_steps(self, steps):
+    def build_steps(self, steps: Union[str, list]):
         '''
         构建steps, 参考 https://argoproj.github.io/argo-workflows/walk-through/steps/
         :param steps:
@@ -524,11 +524,19 @@ class Boot(YamlBoot):
             }
 
         # 单个步骤
-        return self.build_step(steps)
+        return [self.build_step(steps)]
 
-    # 构建step -- steps延迟替换变量, 因为下一步的输入变量会依赖上一步的输出
     #@replace_var_on_params
-    def build_step(self, step, name = None):
+    def build_step(self, step: Union[str, list, dict], name=None, type='steps'):
+        '''
+        构建step
+           兼容steps/dag的tasks中单个步骤的构建，兼容以下情况： 1 step参数类型不同 2 步骤自动命名不同 3 输出变量不同
+           steps延迟替换变量, 因为下一步的输入变量会依赖上一步的输出
+        :param step: 步骤信息, steps中会是list/str/dict, dag的tasks是str
+        :param name: 指定步骤名
+        :param type: 类型： 1 steps 2 tasks(dag)
+        :return: 
+        '''
         # list要递归，因为steps中--代表顺序执行，- 代表并行执行，也就是可能有多层list，要递归调用
         if isinstance(step, list):
             return list(map(self.build_step, step))
@@ -540,30 +548,35 @@ class Boot(YamlBoot):
             step = {
                 'template': step
             }
-        # 解析模板
         template = step['template']
-        if isinstance(template, list): # 列表类型: 第一个是模板名, 其他为参数
-            args = template[1:]
-            template = template[0]
-        else: # 字符串类型: 函数调用格式
-            template, args = parse_func(template, True)
+        # 解析步骤名
+        if isinstance(template, str) and '=' in template:  # 遇到有=，则 步骤名=模板调用
+            name, template = template.split('=')
         if name is None:
-            name = self.namer.build_name(template) # 生成步骤名, 不缓存
+            name = step.get('name')
+            # 根据模板表达式自动命名步骤，必须根据模板+参数，不能根据解析后的模板(只有函数名, 不带参数, 无法确定唯一名)
+            if name is None:
+                if type == 'steps':
+                    name = self.namer.build_name(template)  # steps生成步骤名, 不缓存(遇同名模板计数递增)
+                else:
+                    name = self.namer.get_name(template)  # tasks生成步骤名, 带缓存
+        # 解析模板(函数调用)
+        template, args = parse_func(template, True)
         # 拼接步骤
         step["name"] = name
         step["template"] = template
         if args:
             step['arguments'] = self.build_step_call_args(template, args)
         # 输出变量
-        self.build_step_out_vars(template, name, 'steps')
+        self.build_step_out_vars(template, name, type)
         return step
 
-    def build_step_out_vars(self, tpl_name, step_name, prefix):
+    def build_step_out_vars(self, tpl_name, step_name, type):
         '''
         构建steps调用的输出变量
         :param tpl_name:
         :param step_name:
-        :param prefix: 表达式前缀，steps模板的前缀为steps，dag模板的前缀tasks
+        :param type: 类型： 1 steps 2 tasks(dag)，用做输出变量的前缀，如
                      steps: {{steps.generate.outputs.artifacts.out-artifact}}
                      tasks: {{tasks.generate-artifact.outputs.artifacts.hello-art}}
         :return:
@@ -575,13 +588,13 @@ class Boot(YamlBoot):
         if names:
             for name in names:
                 if name.startswith('@'):  # artifacts: {{steps.generate.outputs.artifacts.out-artifact}}
-                    val = '{{' + prefix + '.' + step_name + '.outputs.artifacts.' + name[1:] + '}}'
+                    val = '{{' + type + '.' + step_name + '.outputs.artifacts.' + name[1:] + '}}'
                 else:  # parameters: {{steps.generate.outputs.parameters.out-parameter}}
-                    val = '{{' + prefix + '.' + step_name + '.outputs.parameters.' + name + '}}'
+                    val = '{{' + type + '.' + step_name + '.outputs.parameters.' + name + '}}'
                 vals[name] = val
         # 设置result变量，注：不建议输出参数名用result
         if 'result' not in vals:
-            vals['result'] = '{{' + prefix + '.' + step_name + '.outputs.result}}'
+            vals['result'] = '{{' + type + '.' + step_name + '.outputs.result}}'
         set_var(step_name, vals)
 
     # 构建steps调用的参数
@@ -664,47 +677,84 @@ class Boot(YamlBoot):
             }
         }
 
-    def build_dag(self, deps):
+    def build_dag(self, option):
         '''
         构建dag(依赖关系), 参考 https://argoproj.github.io/argo-workflows/walk-through/dag/
-        :param deps:
+        :param option {deps, tasks} 二选一
+                    deps: 多行依赖关系表达式，每行格式如下 echo(A) -> echo(B);echo(C) -> echo(D)
+                    tasks: 类似steps中每一步的数据结构，只是可能会多出 dependencies 属性
         :return:
         '''
+        if isinstance(option, str):
+            option = {'deps': [option]}
+        elif isinstance(option, dict):
+            option = {'tasks': option}
+        elif isinstance(option, list):
+            if isinstance(option[0], dict): # 元素是dict的为tasks
+                option = {'tasks': option}
+            else: # 元素为str的为依赖关系表达式
+                option = {'deps': option}
+
+        # 1 根据依赖关系表达式，来构建任务
+        if 'deps' in option:
+            return self.build_dag_deps(option['deps'])
+
+        # 2 直接构建任务
+        return self.build_dag_tasks(option)
+
+    # 直接构建任务, 类似 build_steps 的实现, dependencies属性要自行输入
+    def build_dag_tasks(self, tasks):
+        # 多个步骤，带步骤名
+        if isinstance(tasks, dict):
+            return {
+                "dag": {
+                    "tasks": [self.build_step(task, name, type='tasks') for name, task in tasks.items()]
+                }
+            }
+        return {
+            "dag": {
+                "tasks": list(map(self.build_step, tasks, type='tasks'))
+            }
+        }
+
+    # 根据依赖关系表达式，来构建任务
+    def build_dag_deps(self, deps: list):
         tasks = []
-        if isinstance(deps, str):
-            deps = [deps]
         for dep in deps:
             # 去掉空格
-            #dep = dep.replace(' ', '')
+            # dep = dep.replace(' ', '')
             dep = re.sub(r'\s*(->|;|,)\s*', lambda m: m.group(1), dep)
             if not dep:
                 continue
-            items = dep.split('->') # 分割每个点
-            items = list(map(lambda x: x.split(';'), items)) # 点中有点, 分号分割
+            items = dep.split('->')  # 分割每个点
+            items = list(map(lambda x: x.split(';'), items))  # 点中有点, 分号分割
             # 首个点: 无依赖
             for node in items[0]:
-                name = self.namer.get_name(node)
-                task = {
-                    "name": name,
-                    "template": node
-                }
+                task = self.build_dag_task_dep(node)
                 tasks.append(task)
             # 后续的点: 依赖于前一个点
             for i in range(1, len(items)):
                 item = items[i]
                 for node in item:
-                    task = {
-                        "name": self.namer.get_name(node),
-                        "dependencies": list(map(self.namer.get_name, items[i - 1])),
-                        "template": node
-                    }
+                    task = self.build_dag_task_dep(node, items[i - 1])  # 前一个点为依赖节点
                     tasks.append(task)
-
         return {
             "dag": {
                 "tasks": tasks
             }
         }
+
+    def build_dag_task_dep(self, node, dep_nodes=None):
+        '''
+        构建dag的单个任务依赖
+        :param node: 当前节点
+        :param dep_nodes: 依赖的节点
+        :return:
+        '''
+        task = self.build_step(node, type='tasks')
+        if dep_nodes:
+            task["dependencies"] = list(map(self.namer.get_name, dep_nodes))
+        return task
 
     # --------------------- 抄 K8sBoot 的实现 ---------------------
     # 构建容器中的环境变量
