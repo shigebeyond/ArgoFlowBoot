@@ -52,7 +52,7 @@ class Boot(YamlBoot):
         self._template_outputs = {} # 记录模板的输出参数名
         self._vc_templates = [] # 记录vs模板
         self._vc_mounts = {} # 记录vs挂载路径，key是vc名，value是挂载路径
-        self._arts = {} # 记录工件映射的路径，key是工件名，value是挂载路径
+        self._arts = {} # 记录工件信息，key是工件名，value是挂载路径+存储信息
 
         # 模板主题构建器
         self.template_body_builders = {
@@ -83,7 +83,7 @@ class Boot(YamlBoot):
         self._template_outputs = {} # 记录模板的输出参数名
         self._vc_templates = [] # 记录vs模板
         self._vc_mounts = {} # 记录vs挂载路径，key是vc名，value是挂载路径
-        self._arts = {} # 记录工件映射的路径，key是工件名，value是挂载路径
+        self._arts = {} # 记录工件信息，key是工件名，value是挂载路径+存储信息
 
     def save_yaml(self, data):
         '''
@@ -238,7 +238,9 @@ class Boot(YamlBoot):
     def artifacts(self, arts):
         '''
         共享文件(工件), 所有任务都可读写
-        :param option: 参考 ArgoFlowBoot/example/artifact-type.yml
+        :param option: dict{mount, repo}
+                      mount属性: 指定工件要挂载的容器内路径
+                      repo属性: 存储信息，参考 ArgoFlowBoot/example/artifact-type.yml，支持自带文件存储信息(git/HTTP/GCS/S3)
                       https://argoproj.github.io/argo-workflows/walk-through/artifacts/
                       https://argoproj.github.io/argo-workflows/walk-through/hardwired-artifacts/
         :return:
@@ -251,21 +253,27 @@ class Boot(YamlBoot):
                 option = {
                     'path': option
                 }
-            option['_has_source'] = self.check_artifact_has_source(option)
-            self._arts[name] = option # 记录工件映射的路径
-            set_var('@'+name, option['path']) # 设置变量
+            set_var('@'+name, option) # 设置工件变量: 没有拆分挂载路径+存储信息
+            self._arts[name] = self.split_artifact_mount_and_location(option) # 分开记录工件挂载路径+存储信息
 
-    def check_artifact_has_source(self, art):
+    def split_artifact_mount_and_location(self, art):
         '''
-        检查工件是否自带输入，就是检查是否有两层以上的属性，如s3/http有下一层
+        拆分工件的挂载路径+存储信息(dict, 如s3/http有下一层属性)
            参考 https://argoproj.github.io/argo-workflows/walk-through/hardwired-artifacts/
         :param art:
         :return:
         '''
+        mount = {}
+        location = {}
         for k, v in art.items():
             if isinstance(v, dict):
-                return True
-        return False
+                location[k] = v
+            else:
+                mount[k] = v
+        return {
+            'mount': mount,
+            'location': location
+        }
 
     @replace_var_on_params
     def args(self, args):
@@ -437,6 +445,10 @@ class Boot(YamlBoot):
         :return:
         '''
         key = key.replace('@', '')
+        # 标记被流程级参数引用
+        if type == 'flow':
+            self._arts[key]['flow_ref'] = True
+
         # 1 有明细配置dict
         if isinstance(value, dict):
             return {
@@ -444,7 +456,7 @@ class Boot(YamlBoot):
                 **value
             }
 
-        # 2 调用模板: 用from
+        # 2 调用模板: 用from, 如 from: "{{steps.generate-artifact.outputs.artifacts.etc}}"
         if type == 'call':
             return {
                 "name": key,
@@ -459,12 +471,16 @@ class Boot(YamlBoot):
             }
 
         # 4 最后用全局配的
-        art = self._arts[key].copy()
-        del art['_has_source']
-        return {
+        art = self._arts[key]
+        ret = {
             "name": key,
-            **art
+            **art['mount']
         }
+
+        # 如果是流程级参数 或 (其他参数但没有被流程级参数引用), 则带上存储信息
+        if type == 'flow' or not art.get('flow_ref'):
+            ret.update(art.get('location', {}))
+        return ret
 
     # 构建模板的输入参数
     def build_params(self, option):

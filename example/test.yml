@@ -7,15 +7,15 @@
         write-art(): # 写工件
             container:
               image: docker/whalesay:latest
-              command: cowsay hello world > ${@test} # 写工件对应的文件
+              command: cowsay hello world > ${@test.path} # 写工件对应的文件
             out: # 输出
               msg: hello
               msg2:
-                path: ${@test}
+                path: ${@test.path}
               '@test': # 输出工件
         read-art(@test): # 读工件, 有1个artifacts的参数
             container:
-              command: cat ${@test}
+              command: cat ${@test.path}
         main(): # 工作流入口必然是main
             steps:
               - write-art

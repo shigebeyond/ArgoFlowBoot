@@ -5,12 +5,12 @@
     - templates:
         generate-artifact(): # 生成工件
             container:
-              command: cowsay hello world > ${@hello-art} # 写工件对应的文件
+              command: cowsay hello world > ${@hello-art.path} # 写工件对应的文件
             out: # 输出
               '@hello-art': # 输出工件
         consume-artifact(@hello-art): # 消费工件, 有1个artifacts的参数
             container:
-              command: cat ${@hello-art}
+              command: cat ${@hello-art.path}
         main(): # 工作流入口必然是main
             steps:
               - generate-artifact()

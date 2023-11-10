@@ -5,7 +5,7 @@
             container:
               command: echo $msg
         main(): # 工作流入口必然是main，要放最后
-            dag:
+            dag: # 依赖关系
               - echo(A) -> echo(B);echo(C) -> echo(D)
 
 
