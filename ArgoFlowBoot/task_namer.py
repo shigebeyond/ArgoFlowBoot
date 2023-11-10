@@ -1,7 +1,7 @@
 import re
 from abc import ABC, abstractmethod
+from typing import Union
 from pyutilb.util import md5, parse_func
-
 
 # 任务命名者, 给step/dag task命名
 class TaskNamer(ABC):
@@ -10,26 +10,27 @@ class TaskNamer(ABC):
         self.task2name = {}
 
     # 获得任务名, 有缓存, 统一入口
-    def get_name(self, task: str):
+    def get_name(self, task: Union[str, list]):
+        key = str(task) # task可能是list
         if task not in self.task2name:
-            self.task2name[task] = self.build_name(task)
-        return self.task2name[task]
+            self.task2name[key] = self.build_name(task)
+        return self.task2name[key]
 
     # 构建任务名, 无缓存, 子类实现
     @abstractmethod
-    def build_name(self, task: str):
+    def build_name(self, task: Union[str, list]):
         pass
 
 # md5做任务命名者
 class Md5TaskNamer(TaskNamer):
 
-    def build_name(self, task: str):
+    def build_name(self, task: Union[str, list]):
         return md5(task)
 
 # 转中划线的任务命名者
 class MidlineTaskNamer(TaskNamer):
 
-    def build_name(self, task: str):
+    def build_name(self, task: Union[str, list]):
         name = re.sub(r'[\(,]', '-', task)
         return re.sub(r'[\s\)]', '', name)
 
@@ -47,7 +48,7 @@ class IncrTaskNamer(TaskNamer):
         self.incr_letter = incr_letter
         self.counter = 0
 
-    def build_name(self, task: str):
+    def build_name(self, task: Union[str, list]):
         # 计数+1
         self.counter += 1
         # 拼接前缀+计数
@@ -67,7 +68,7 @@ class FuncIncrTaskNamer(TaskNamer):
         super().__init__()
         self.counters = {}
 
-    def build_name(self, task: str):
+    def build_name(self, task: Union[str, list]):
         # 拆分出函数名
         func, _ = parse_func(task, True)
         # 第一次，原样返回函数名
