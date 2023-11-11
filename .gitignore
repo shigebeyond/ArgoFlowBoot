@@ -11,3 +11,4 @@ boot.log*
 stat.yml
 data/
 tmp/
+docs

@@ -1,21 +1,36 @@
 # https://argoproj.github.io/argo-workflows/walk-through/artifacts/
 - flow(artifact-test):
-    - artifacts: # 共享文件(工件), 所有任务都可读写
-        hello-art: /tmp/hello_world.txt # 工件名: 挂载路径
     - templates:
-        generate-artifact(): # 生成工件
+        whalesay(): # 生成工件
             container:
-              command: cowsay hello world > ${@hello-art.path} # 写工件对应的文件
+              command: cowsay hello world | tee /tmp/hello_world.txt # 写工件对应的文件
             out: # 输出
-              '@hello-art': # 输出工件
-        consume-artifact(@hello-art): # 消费工件, 有1个artifacts的参数
+              # generate hello-art artifact from /tmp/hello_world.txt
+              # artifacts can be directories as well as files
+              '@hello-art': /tmp/hello_world.txt # 工件名: 挂载路径(路径可省，默认路径为 /tmp/artifacts/工件名)
+        print-message(@msg=/tmp/message): # 读工件, 有1个artifacts的参数 unpack the input artifact and put it at /tmp/message
             container:
-              command: cat ${@hello-art.path}
+              command: cat ${@msg.path}
         main(): # 工作流入口必然是main
             steps:
-              - generate-artifact()
-              - - consume-artifact(${generate-artifact.@hello-art}) # 需要找到上一个写的，然后传递到下一个调用中
+            - - whalesay()
+            - - print-message(${whalesay.@hello-art}) # 将上一个写的，传递给下一个调用中
 
+# 更简洁
+- flow(artifact-test2):
+    - templates:
+        whalesay(): # 生成工件
+            container:
+              command: cowsay hello world | tee /tmp/hello_world.txt
+            out:
+              '@hello-art': /tmp/hello_world.txt
+        print-message(@msg): # 读工件, 其中 @msg 参数无默认值， 默认挂载到 /tmp/artifacts/msg
+            container:
+              command: cat ${@msg.path}
+        main(): # 工作流入口必然是main
+            steps:
+            - - whalesay()
+            - - print-message(${whalesay.@hello-art}) # 将上一个写的，传递给下一个调用中
 
 
 

@@ -318,16 +318,18 @@ class Boot(YamlBoot):
         # 解析函数调用
         name, args = parse_func(name, True)
         # 构建输入
-        self._template_inputs[name] = args # 记录模板的输入参数名
         push_vars_stack() # 变量入栈
         inputs = self.build_list_args(args, 'inputs') # 构建输入，会增加变量
+        # 记录模板的输入参数名
+        # self._template_inputs[name] = args
+        self._template_inputs[name] = [arg.split('=')[0] for arg in args]
         if 'steps' not in option: # steps延迟替换变量, 因为下一步的输入变量会依赖上一步的输出
             option = replace_var(option, False) # 替换变量
         # 构建输出
         out = get_and_del_dict_item(option, 'out')
         outputs = self.build_dict_args(out, 'outputs') # 构建输出
-        if out:
-            self._template_outputs[name] = out.keys()  # 记录模板的输出参数名
+        if out: # 记录模板的输出参数名
+            self._template_outputs[name] = out.keys()
         # 构建主体
         body = self.build_template_body(option)
         if body is None:
@@ -479,28 +481,26 @@ class Boot(YamlBoot):
         '''
         key = key.replace('@', '')
 
-        # 1 有明细配置dict
-        if isinstance(value, dict):
-            return {
-                "name": key,
-                **value
-            }
-
-        # 2 调用模板: 用from, 如 from: "{{steps.generate-artifact.outputs.artifacts.etc}}"
-        if type == 'call':
-            return {
-                "name": key,
-                "from": value
-            }
-
-        # 3 优先用用户填的
+        # 1 用户填的
         if value is not None:
-            return {
-                "name": key,
-                "path": value
-            }
+            # 1.1 有明细配置dict
+            if isinstance(value, dict):
+                ret = {
+                    "name": key,
+                    **value
+                }
+            else: # 1.2 单值
+                ret = {
+                    "name": key,
+                    "path": value
+                }
 
-        # 4 如果用户没填，则默认用流程级同名参数
+            # 1.3 对调用模板要修正属性: path换from, 如 from: "{{steps.generate-artifact.outputs.artifacts.etc}}"
+            if type == 'call' and 'path' in ret:
+                ret['from'] = get_and_del_dict_item(ret, 'path')
+            return ret
+
+        # 2 如果用户没填，则默认用流程级同名参数
         return {
             "name": key,
         }

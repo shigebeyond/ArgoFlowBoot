@@ -10,7 +10,7 @@
                 commmand: cowsay "hello world"
         main(): # 工作流入口必然是main
             steps:
-                - whalesay()
+            -   - whalesay()
                 - approve()
                 - delay() # 暂停
                 - whalesay() # 恢复

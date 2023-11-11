@@ -15,7 +15,7 @@
               command: cat /etc/os-release
         main(os-list): # 工作流入口必然是main，要放最后
             steps:
-              - template: cat-os-release({{item.image}},{{item.tag}})
+            - - template: cat-os-release({{item.image}},{{item.tag}})
                 withParam: $os-list # parameter specifies the list to iterate over
 
 

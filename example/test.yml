@@ -1,8 +1,8 @@
 - flow(test):
     - vc_templates: # 共享的pvc, 所有任务的容器都会挂载
         - work:/work:1Gi # pvc名:挂载路径:空间大小
-    - artifacts: # 共享文件(工件), 所有任务都可读写
-        test: /tmp/test.txt # 工件名: 挂载路径
+    - args:
+        '@test': /tmp/test.txt # 工件名: 挂载路径
     - templates:
         write-art(): # 写工件
             container:
@@ -18,7 +18,7 @@
               command: cat ${@test.path}
         main(): # 工作流入口必然是main
             steps:
-              - write-art
+            - - write-art
               - - read-art(${write-art.@test}) # 需要找到上一个写的，然后传递到下一个调用中
             out: # 输出
               stepresult:

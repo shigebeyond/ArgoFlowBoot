@@ -12,7 +12,7 @@
                 commmand: echo "it was heads"
         main(): # 工作流入口必然是main
             steps:
-                - flip-coin()
+              - - flip-coin()
                 - template: heads() # call heads template if "heads"
                   when: "${flip-coin.result} == heads"
                 - template: flip-coin() # keep flipping coins if "tails"

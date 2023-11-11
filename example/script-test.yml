@@ -24,7 +24,7 @@
               command: echo result was $msg
         main(): # 工作流入口必然是main
             steps:
-              - bash-random()
+            - - bash-random()
               - - print-message(${bash-random.result}) # 需要找到上一个写的，然后传递到下一个调用中
 
 

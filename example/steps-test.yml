@@ -6,9 +6,10 @@
               command: cowsay $msg
         main(): # 工作流入口必然是main，要放最后
             steps:
-              - whalesay(hello1)
-              - whalesay(hello2)
-              - whalesay(hello3)
+            # --代表顺序执行，- 代表并行执行
+            - - whalesay(hello1) # hello1 is run before the following steps
+            - - whalesay(hello2) # 串行 double dash => run after previous step
+              - whalesay(hello3) # 并行 single dash => run in parallel with previous step
 
 
 

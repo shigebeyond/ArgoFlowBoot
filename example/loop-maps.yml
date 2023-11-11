@@ -8,7 +8,7 @@
         main(): # 工作流入口必然是main，要放最后
             steps:
               # parameter specifies the list to iterate over
-              - template: cat-os-release({{item.image}},{{item.tag}})
+            - - template: cat-os-release({{item.image}},{{item.tag}})
                 withItems:
                   - { image: 'debian', tag: '9.1' }       #item set 1
                   - { image: 'debian', tag: '8.9' }       #item set 2

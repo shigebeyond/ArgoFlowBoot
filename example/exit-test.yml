@@ -12,7 +12,7 @@
                 commmand: echo boohoo!
         exit(): # 退出处理
             steps:
-                - send-email()
+              - - send-email()
                 - template: celebrate
                   when: "{{workflow.status}} == Succeeded"
                 - template: cry

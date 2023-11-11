@@ -18,7 +18,7 @@
                 commmand: echo "it was heads the first flip and tails the second. Or it was two times tails."
         main(): # 工作流入口必然是main
             steps:
-                - flip-coin()
+              - - flip-coin()
                 - template: heads() # call heads template if "heads"
                   when: "${flip-coin.result} == heads"
                 - template: tails() # call tails template if "tails"
