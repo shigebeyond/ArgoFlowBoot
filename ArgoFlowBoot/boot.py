@@ -19,7 +19,7 @@ from ArgoFlowBoot.task_namer import *
 class ArtifactProxy(dict):
 
     def __init__(self, data, repr):
-        super().__init__(data)
+        super().__init__(data or {})
         self.repr = repr # 如 {{inputs.artifacts.source}}
 
     def __repr__(self):
@@ -121,11 +121,11 @@ class Boot(YamlBoot):
         file = os.path.join(self.output_dir, file)
         write_file(file, data)
 
-    def print_apply_cmd(self):
+    def print_submit_cmd(self):
         '''
         打印 kubectl apply 命令
         '''
-        cmd = f'App[{self._flow}]的资源定义文件已生成完毕, 如要更新到集群中的资源请手动执行: kubectl apply --record=true -f {self.output_dir}'
+        cmd = f'流程[{self._flow}]的定义文件已生成完毕, 如要提交到到集群中请手动执行: argo submit {self.output_dir}/{self._flow}.yml'
         log.info(cmd)
 
     # --------- 动作处理的函数 --------
@@ -147,7 +147,7 @@ class Boot(YamlBoot):
         # 生成flow
         self.build_flow()
         # 打印 kubectl apply 命令
-        self.print_apply_cmd()
+        self.print_submit_cmd()
         # 清空app相关的属性
         self.clear_app()
 
@@ -190,12 +190,12 @@ class Boot(YamlBoot):
                 **self._spec,
                 "volumeClaimTemplates": self._vc_templates,
                 "templates": list(self._templates.values()),
-                "ttlStrategy": {
-                    "secondsAfterCompletion": 300
-                },
-                "podGC": {
-                    "strategy": "OnPodCompletion"
-                }
+                # "ttlStrategy": {
+                #     "secondsAfterCompletion": 300
+                # },
+                # "podGC": {
+                #     "strategy": "OnPodCompletion"
+                # }
             }
         }
         del_dict_none_item(yaml["spec"])
@@ -343,9 +343,21 @@ class Boot(YamlBoot):
         del_dict_none_item(tpl)
         self._templates[name] = tpl
 
+    # 构建输入变量
+    def build_input_vars(self, type, k, v=None):
+        if k.startswith('@'):  # artifacts
+            param = '{{inputs.artifacts.' + k.replace('@', '') + '}}' # {{inputs.artifacts.source}}
+            if type == 'flow-args':
+                set_var(k, ArtifactProxy(v, param))
+            elif type == 'inputs' and get_var(k, False) is None:
+                set_var(k, ArtifactProxy(v, param))
+        else:  # parameters
+            if type == 'flow-args' or type == 'inputs':
+                set_var(k, '{{inputs.parameters.' + k + '}}') # {{inputs.parameters.message}}
+
     def build_dict_args(self, args: dict, type: str):
         '''
-        构建inputs/outputs/flow/call(调用模板)等的dict类型的参数
+        构建 outputs/flow args/call(调用模板) 的dict类型的参数
         输入参数参考 https://argoproj.github.io/argo-workflows/walk-through/parameters/
         输出参数参考 https://argoproj.github.io/argo-workflows/walk-through/output-parameters/
 
@@ -360,8 +372,10 @@ class Boot(YamlBoot):
         arts = {}
         for k, v in args.items():
             if k.startswith('@'): # artifacts
+                v = self.fix_artifact_option(v, k)
                 arts[k] = v
             else: # parameters
+                v = replace_var(v, False)
                 params[k] = v
             # 设输入变量
             self.build_input_vars(type, k, v)
@@ -373,20 +387,9 @@ class Boot(YamlBoot):
         del_dict_none_item(ret)
         return ret
 
-    # 构建输入变量
-    def build_input_vars(self, type, k, v=None):
-        if k.startswith('@'):  # artifacts
-            if type == 'flow-args' and v is not None:
-                set_var(k, ArtifactProxy(v, '{{inputs.artifacts.' + k.replace('@', '') + '}}'))
-            elif type == 'inputs' and get_var(k) is None:
-                set_var(k, '{{inputs.artifacts.' + k.replace('@', '') + '}}')  # {{inputs.artifacts.source}}
-        else:  # parameters
-            if type == 'flow-args' or type == 'inputs':
-                set_var(k, '{{inputs.parameters.' + k + '}}') # {{inputs.parameters.message}}
-
     def build_list_args(self, args: list, type: str):
         '''
-        构建inputs/outputs/flow/call(调用模板)等的list类型的参数
+        构建 inputs 的list类型的参数
         输入参数参考 https://argoproj.github.io/argo-workflows/walk-through/parameters/
         输出参数参考 https://argoproj.github.io/argo-workflows/walk-through/output-parameters/
 
@@ -397,15 +400,23 @@ class Boot(YamlBoot):
         if not args:
             return None
         # 拆分parameters与artifacts
-        params = []
-        arts = []
+        params = {}
+        arts = {}
         for arg in args:
-            if arg.startswith('@'):  # artifacts
-                arts.append(arg)
+            # 如果参数带默认值，则拆分参数名与参数值
+            if '=' in arg:
+                k, v = arg.split('=')
+            else:
+                k = arg
+                v = None
+            if k.startswith('@'):  # artifacts
+                v = self.fix_artifact_option(v, k)
+                arts[k] = v
             else: # parameters
-                params.append(arg)
+                v = replace_var(v)
+                params[k] = v
             # 设输入变量
-            self.build_input_vars(type, arg)
+            self.build_input_vars(type, k, v)
         # 构建参数
         ret = {
             "parameters": self.build_params(params),
@@ -413,6 +424,28 @@ class Boot(YamlBoot):
         }
         del_dict_none_item(ret)
         return ret
+
+    def fix_artifact_option(self, v, k):
+        if not v:
+            v = {}
+
+        # 带参数
+        if isinstance(v, str) and v.startswith('$'):
+            v = replace_var(v, False)
+
+        # 路径
+        if isinstance(v, str):
+            path = v
+            if ':' in path:
+                path, mode = path.split(':', 1)
+                v = {'path': path, 'mode': mode}
+            else:
+                v = {'path': path}
+
+        # 未指定path，则取 /tmp/工件名
+        if not v.get('path'):
+            v['path'] = '/tmp/artifacts/' + k.replace('@', '')
+        return v
 
     def build_artifacts(self, option, type=None):
         '''
@@ -563,7 +596,11 @@ class Boot(YamlBoot):
         template = step['template']
         # 解析步骤名
         if isinstance(template, str) and '=' in template:  # 遇到有=，则 步骤名=模板调用
-            name, template = template.split('=')
+            # name, template = template.split('=') # 检查分割, 不能处理参数带=的情况
+            mat = re.search(r'^([^\(]+)=', template) # 正则分割
+            if mat is not None:
+                name = mat.group(1)
+                template = template.replace(name, '')
         if name is None:
             name = step.get('name')
             # 根据模板表达式自动命名步骤，必须根据模板+参数，不能根据解析后的模板(只有函数名, 不带参数, 无法确定唯一名)
