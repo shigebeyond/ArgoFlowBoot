@@ -7,7 +7,7 @@
             container:
               command: echo -n hello world > /tmp/hello_world.txt
             out:
-              hello:
+              hello: # set the value of hello to the contents of this hello-world.txt
                 path: /tmp/hello_world.txt
         print-message(msg):
             container:
@@ -15,7 +15,8 @@
         main(): # 工作流入口必然是main，要放最后
             steps:
             - - whalesay()
-              - print-message(${whalesay.hello})
+            # Pass the hello-param output from the generate-parameter step as the message input to print-message
+            - - print-message(${whalesay.hello})
 
 
 

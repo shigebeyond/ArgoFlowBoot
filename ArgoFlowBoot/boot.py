@@ -68,6 +68,9 @@ class Boot(YamlBoot):
         self._vc_templates = None # 记录vs模板
         self._vc_mounts = {} # 记录vs挂载路径，key是vc名，value是挂载路径
 
+        # 任务命名者
+        self.namer = FuncIncrTaskNamer()
+
         # 模板主题构建器
         self.template_body_builders = {
             'container': self.build_container,
@@ -83,9 +86,6 @@ class Boot(YamlBoot):
         for version in py_versions:
             self.template_body_builders['python'+version] = self.wrap_build_python(version)
 
-        # 任务命名者
-        self.namer = FuncIncrTaskNamer()
-
     # 清空app相关的属性
     def clear_app(self):
         self._flow = None  # 流程名
@@ -98,6 +98,8 @@ class Boot(YamlBoot):
         self._template_outputs = {} # 记录模板的输出参数名
         self._vc_templates = None # 记录vs模板
         self._vc_mounts = {} # 记录vs挂载路径，key是vc名，value是挂载路径
+        clear_vars('*') # 清理全部变量
+        self.namer = FuncIncrTaskNamer() # 重置命名器，因为他内部有状态(计数)
 
     def save_yaml(self, data):
         '''
@@ -280,6 +282,9 @@ class Boot(YamlBoot):
     # 获得默认镜像
     def get_default_image(self, option):
         cmd = option.get('command')
+        if 'source' in option and cmd is None:
+            return 'bash'
+
         if cmd is None:
             return 'alpine'
 
@@ -288,7 +293,7 @@ class Boot(YamlBoot):
             version = re.search(r'^python([\d\.]+)?', cmd).group(1) or '3.6' # 从命令中获得python版本，缺省为3.6
             return f"python:alpine{version}"
 
-        if 'cowsay ' in cmd:
+        if 'cowsay ' in cmd or 'cowsay ' == cmd :
             return 'docker/whalesay'
 
         return 'alpine'
@@ -482,7 +487,7 @@ class Boot(YamlBoot):
         key = key.replace('@', '')
 
         # 1 用户填的
-        if value is not None:
+        if value:
             # 1.1 有明细配置dict
             if isinstance(value, dict):
                 ret = {
@@ -497,6 +502,7 @@ class Boot(YamlBoot):
 
             # 1.3 对调用模板要修正属性: path换from, 如 from: "{{steps.generate-artifact.outputs.artifacts.etc}}"
             if type == 'call' and 'path' in ret:
+                ret = ret.copy()
                 ret['from'] = get_and_del_dict_item(ret, 'path')
             return ret
 
@@ -525,7 +531,7 @@ class Boot(YamlBoot):
         raise Exception(f"无效参数选项: {option}")
 
     def build_param(self, key, value=None):
-        if value is None:
+        if not value:
             return {
                 "name": key
             }
