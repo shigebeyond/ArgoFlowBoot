@@ -74,6 +74,7 @@ class Boot(YamlBoot):
         # 模板主题构建器
         self.template_body_builders = {
             'container': self.build_container,
+            'sidecars': self.build_sidecars,
             'script': self.build_script,
             'steps': self.build_steps,
             'suspend': self.build_suspend,
@@ -272,12 +273,14 @@ class Boot(YamlBoot):
             self.build_template(name, option)
 
     def build_template_body(self, option):
+        ret = {}
         # 逐个匹配模板类型，并调用对应的模板主体构建器
         for type, builder in self.template_body_builders.items():
             if type in option:
-                return builder(get_and_del_dict_item(option, type))
+                part = builder(get_and_del_dict_item(option, type))
+                ret.update(part)
 
-        return None
+        return ret
 
     # 获得默认镜像
     def get_default_image(self, option):
@@ -288,6 +291,8 @@ class Boot(YamlBoot):
         if cmd is None:
             return 'alpine'
 
+        if isinstance(cmd, list):
+            cmd = cmd[0]
         cmd = cmd.strip()
         if cmd.startswith('python'):
             version = re.search(r'^python([\d\.]+)?', cmd).group(1) or '3.6' # 从命令中获得python版本，缺省为3.6
@@ -296,21 +301,39 @@ class Boot(YamlBoot):
         if 'cowsay ' in cmd or 'cowsay ' == cmd :
             return 'docker/whalesay'
 
+        if 'curl ' in cmd or 'curl ' == cmd :
+            return 'appropriate/curl'
+
         return 'alpine'
 
     # 构建容器模板
     def build_container(self, option):
-        ret = {
-            "container": {
-                "image": get_and_del_dict_item(option, "image", self.get_default_image(option)),
-                "command": self.fix_command(get_and_del_dict_item(option, "command")),
-                "args": self.fix_command_args(get_and_del_dict_item(option, "args")),
-                "volumeMounts": self.build_volume_mounts(),
-                "env": self.build_env(get_and_del_dict_item(option, 'env')),
-                **option
-            },
+        return {
+            "container": self.build_container_body(option),
         }
-        del_dict_none_item(ret["container"])
+
+    def build_container_body(self, option):
+        ret = {
+            "image": get_and_del_dict_item(option, "image", self.get_default_image(option)),
+            "command": self.fix_command(get_and_del_dict_item(option, "command")),
+            "args": self.fix_command_args(get_and_del_dict_item(option, "args")),
+            "volumeMounts": self.build_volume_mounts(),
+            "env": self.build_env(get_and_del_dict_item(option, 'env')),
+            **option
+        }
+        del_dict_none_item(ret)
+        return ret
+
+    # 构建边车模板
+    def build_sidecars(self, option: dict):
+        containers = []
+        for name, container in option.items():
+            container = self.build_container_body(container)
+            container['name'] = name
+            containers.append(container)
+        ret = {
+            "sidecars": containers
+        }
         return ret
 
     def build_template(self, name: str, option: dict):
@@ -320,14 +343,19 @@ class Boot(YamlBoot):
         :param option: 任务模板选项
         :return:
         '''
+        push_vars_stack() # 变量入栈
         # 解析函数调用
         name, args = parse_func(name, True)
         # 构建输入
-        push_vars_stack() # 变量入栈
-        inputs = self.build_list_args(args, 'inputs') # 构建输入，会增加变量
+        if args: # 函数调用形式的入参
+            inputs = self.build_list_args(args, 'inputs') # 构建输入，会增加变量
+        else: # 显示定义`in`的入参
+            ins = get_and_del_dict_item(option, 'in')
+            if ins:
+                inputs = self.build_dict_args(ins, 'inputs') # 构建输入，会增加变量
         # 记录模板的输入参数名
-        # self._template_inputs[name] = args
-        self._template_inputs[name] = [arg.split('=')[0] for arg in args]
+        # self._template_inputs[name] = args # wrong: args太复杂了，可能用=带参数默认值，可能用dict => 从inputs中解析
+        self._template_inputs[name] = self.build_input_names(inputs)
         if 'steps' not in option: # steps延迟替换变量, 因为下一步的输入变量会依赖上一步的输出
             option = replace_var(option, False) # 替换变量
         # 构建输出
@@ -346,21 +374,47 @@ class Boot(YamlBoot):
             "outputs": outputs,
             **option
         }
-        pop_vars_stack() # 变量出栈
+        pop_vars_stack(False) # 变量出栈
         del_dict_none_item(tpl)
         self._templates[name] = tpl
+
+    # 收集inputs中的参数名
+    def build_input_names(self, inputs):
+        params = inputs.get("parameters") or []
+        arts = inputs.get("artifacts") or []
+        return [e['name'] for e in params + arts]
 
     # 构建输入变量
     def build_input_vars(self, type, k, v=None):
         if k.startswith('@'):  # artifacts
-            param = '{{inputs.artifacts.' + k.replace('@', '') + '}}' # {{inputs.artifacts.source}}
             if type == 'flow-args':
-                set_var(k, ArtifactProxy(v, param))
+                set_var(k, ArtifactProxy(v, '{{workflow.artifacts.' + k.replace('@', '') + '}}')) # {{workflow.artifacts.art_name}}
             elif type == 'inputs' and get_var(k, False) is None:
-                set_var(k, ArtifactProxy(v, param))
-        else:  # parameters
-            if type == 'flow-args' or type == 'inputs':
-                set_var(k, '{{inputs.parameters.' + k + '}}') # {{inputs.parameters.message}}
+                set_var(k, ArtifactProxy(v, '{{inputs.artifacts.' + k.replace('@', '') + '}}')) # {{inputs.artifacts.source}}
+            return
+
+        # parameters
+        if type == 'flow-args':
+            set_var(k, '{{workflow.parameters.' + k + '}}')  # {{workflow.parameters.parameter_name}}
+        elif type == 'inputs':
+            set_var(k, '{{inputs.parameters.' + k + '}}') # {{inputs.parameters.message}}
+
+    def check_input_args_order(self, names: list, type: str):
+        '''
+        检查参数的顺序: artifacts只能定义在parameters后面
+        :param names: 参数名
+        :param type: 参数类型: inputs/outputs/flow-args/call(调用模板)
+        '''
+        if type == 'inputs' or type == 'flow-args':
+            art_exist = False # artifacts是否出现过
+            for name in names:
+                if name.startswith('@'):  # artifacts
+                    art_exist = True
+                    continue
+
+                # parameters
+                if art_exist:
+                    raise Exception(f"入参定义{names}, 不符合规范: artifacts只能定义在parameters后面")
 
     def build_dict_args(self, args: dict, type: str):
         '''
@@ -369,11 +423,13 @@ class Boot(YamlBoot):
         输出参数参考 https://argoproj.github.io/argo-workflows/walk-through/output-parameters/
 
         :param args:
-        :param type: 参数类型: inputs/outputs/flow/call(调用模板)
+        :param type: 参数类型: inputs/outputs/flow-args/call(调用模板)
         :return:
         '''
         if not args:
             return None
+        # 检查参数的顺序
+        self.check_input_args_order(args.keys(), type)
         # 拆分parameters与artifacts
         params = {}
         arts = {}
@@ -401,7 +457,7 @@ class Boot(YamlBoot):
         输出参数参考 https://argoproj.github.io/argo-workflows/walk-through/output-parameters/
 
         :param args:
-        :param type: 参数类型: inputs/outputs/flow/call(调用模板)
+        :param type: 参数类型: inputs/outputs/flow-args/call(调用模板)
         :return:
         '''
         if not args:
@@ -409,6 +465,7 @@ class Boot(YamlBoot):
         # 拆分parameters与artifacts
         params = {}
         arts = {}
+        names = []
         for arg in args:
             # 如果参数带默认值，则拆分参数名与参数值
             if '=' in arg:
@@ -416,6 +473,7 @@ class Boot(YamlBoot):
             else:
                 k = arg
                 v = None
+            names.append(k)
             if k.startswith('@'):  # artifacts
                 v = self.fix_artifact_option(v, k)
                 arts[k] = v
@@ -424,6 +482,8 @@ class Boot(YamlBoot):
                 params[k] = v
             # 设输入变量
             self.build_input_vars(type, k, v)
+        # 检查参数的顺序
+        self.check_input_args_order(names, type)
         # 构建参数
         ret = {
             "parameters": self.build_params(params),
@@ -435,9 +495,7 @@ class Boot(YamlBoot):
     def fix_artifact_option(self, v, k):
         if not v:
             v = {}
-
-        # 带参数
-        if isinstance(v, str) and v.startswith('$'):
+        else: # 解析变量，有可能他依赖于前一个参数
             v = replace_var(v, False)
 
         # 路径
@@ -460,7 +518,7 @@ class Boot(YamlBoot):
         :param option: dict(参数名, 工件信息)，其中工件信息包含挂载路径+存储信息，参考 ArgoFlowBoot/example/artifact-type.yml，支持自带文件存储信息(git/HTTP/GCS/S3)
                       https://argoproj.github.io/argo-workflows/walk-through/artifacts/
                       https://argoproj.github.io/argo-workflows/walk-through/hardwired-artifacts/
-        :param type: 参数类型: inputs/outputs/flow/call(调用模板)
+        :param type: 参数类型: inputs/outputs/flow-args/call(调用模板)
         :return:
         '''
         if not option:
@@ -481,7 +539,7 @@ class Boot(YamlBoot):
         :param value: 挂载路径+存储信息，参考 ArgoFlowBoot/example/artifact-type.yml，支持自带文件存储信息(git/HTTP/GCS/S3)
                       https://argoproj.github.io/argo-workflows/walk-through/artifacts/
                       https://argoproj.github.io/argo-workflows/walk-through/hardwired-artifacts/
-        :param type: 参数类型: inputs/outputs/flow/call(调用模板)
+        :param type: 参数类型: inputs/outputs/flow-args/call(调用模板)
         :return:
         '''
         key = key.replace('@', '')
@@ -516,7 +574,7 @@ class Boot(YamlBoot):
         '''
 
         :param option:
-        :param type: 参数类型: inputs/outputs/flow/call(调用模板)
+        :param type: 参数类型: inputs/outputs/flow-args/call(调用模板)
         :return:
         '''
         if not option:
