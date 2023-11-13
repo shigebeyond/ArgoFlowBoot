@@ -2,8 +2,10 @@ package main
 
 import (
 	"fmt"
+	"time"
 )
 
 func main() {
-	fmt.Println("Hello go example!")
+    currentTime := time.Now()
+	fmt.Println("Hello go example! Now is ", currentTime)
 }

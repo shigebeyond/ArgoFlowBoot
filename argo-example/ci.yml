@@ -10,7 +10,7 @@
             in:
               revision:
               '@code':
-                 path: /code/argo-example
+                 path: /code/ArgoFlowBoot
                  git:
                    #repo: https://github.com/golang/example.git
                    repo: https://gitee.com/shigebeyond/ArgoFlowBoot
@@ -18,7 +18,7 @@
             container:
               image: golang:1.8
               command: |
-                    cd /code/argo-example/hello &&
+                    cd /code/ArgoFlowBoot/argo-example/hello &&
                     git status &&
                     go build -v .
         run(image): # 2 运行golang-example
@@ -27,7 +27,7 @@
               command: |
                     uname -a ;
                     cat /etc/os-release ;
-                    /code/argo-example/hello/hello
+                    /code/ArgoFlowBoot/argo-example/hello/hello
         main(revision): # 工作流入口必然是main
             steps:
             - - build($revision)
@@ -39,7 +39,7 @@
 - flow(ci2):
     - set_vars:
         default-code:
-          path: /code/argo-example
+          path: /code/ArgoFlowBoot
           git:
             repo: https://gitee.com/shigebeyond/ArgoFlowBoot
             revision: '{{inputs.parameters.revision}}'
@@ -52,7 +52,7 @@
             container:
               image: golang:1.8
               command: |
-                    cd /code/argo-example/hello &&
+                    cd /code/ArgoFlowBoot/argo-example/hello &&
                     git status &&
                     go build -v .
         run(image): # 2 运行golang-example
@@ -61,7 +61,7 @@
               command: |
                     uname -a ;
                     cat /etc/os-release ;
-                    /code/argo-example/hello/hello
+                    /code/ArgoFlowBoot/argo-example/hello/hello
         main(revision): # 工作流入口必然是main
             steps:
             - - build($revision)
