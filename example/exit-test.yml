@@ -3,20 +3,21 @@
     - templates:
         send-email():
             container:
-                command: "echo send e-mail: {{workflow.name}} {{workflow.status}} {{workflow.duration}}"
+                command: "echo send e-mail: flow={{workflow.name}}, status={{workflow.status}}, duration={{workflow.duration}} seconds"
         celebrate():
             container:
-                commmand: echo hooray!
+                command: echo hooray!
         cry():
             container:
-                commmand: echo boohoo!
+                command: echo boohoo!
         exit(): # 退出处理
             steps:
+              # main()后: send-email()，如果成功，则celebrate()，否则cry()
               - - send-email()
-                - template: celebrate
-                  when: "{{workflow.status}} == Succeeded"
-                - template: cry
-                  when: "{{workflow.status}} != Succeeded"
+              - - when: "{{workflow.status}} == Succeeded"
+                  template: celebrate
+                - when: "{{workflow.status}} != Succeeded"
+                  template: cry
         main(): # 工作流入口必然是main
             container:
                 command: echo intentional failure; exit 1

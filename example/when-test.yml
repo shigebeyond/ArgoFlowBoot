@@ -9,30 +9,29 @@
                     print(result)
         heads():
             container:
-                commmand: echo "it was heads"
+                command: echo "it was heads"
         tails():
             container:
-                commmand: echo "it was tails"
+                command: echo "it was tails"
         heads-tails-or-twice-tails():
             container:
-                commmand: echo "it was heads the first flip and tails the second. Or it was two times tails."
+                command: echo "it was heads the first flip and tails the second. Or it was two times tails."
         main(): # 工作流入口必然是main
             steps:
               - - flip-coin()
-                - template: heads() # call heads template if "heads"
-                  when: "${flip-coin.result} == heads"
-                - template: tails() # call tails template if "tails"
-                  when: "${flip-coin.result} == tails"
-                - flip-coin()
-                - template: heads-tails-or-twice-tails()
-                  # call heads template if first flip was "heads" and second was "tails" OR both were "tails"
-                  when: |
-                      ( ${flip-coin.result} == heads && ${flip-coin2.result} == tails) ||
-                      ( ${flip-coin.result} == tails && ${flip-coin2.result} == tails )
-                - template: heads() # call heads template if ~ "hea"
-                  when: "${flip-coin2.result} =~ hea"
-                - template: tails() # call heads template if ~ "tai"
-                  when: "${flip-coin2.result} =~ tai"
+              - - when: "${flip-coin.result} == heads"
+                  template: heads() # call heads template if "heads"
+                - when: "${flip-coin.result} == tails"
+                  template: tails() # call tails template if "tails"
+              - - flip-coin()
+              # call heads template if first flip was "heads" and second was "tails" OR both were "tails"
+              - - when: ( ${flip-coin.result} == heads && ${flip-coin2.result} == tails) || ( ${flip-coin.result} == tails && ${flip-coin2.result} == tails )
+                  template: heads-tails-or-twice-tails()
+                - when: "${flip-coin2.result} =~ hea"
+                  template: heads() # call heads template if ~ "hea"
+                - when: "${flip-coin2.result} =~ tai"
+                  template: tails() # call heads template if ~ "tai"
+
 
 
 

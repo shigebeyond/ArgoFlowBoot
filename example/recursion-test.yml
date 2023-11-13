@@ -9,14 +9,17 @@
                     print(result)
         heads():
             container:
-                commmand: echo "it was heads"
+                command: echo "it was heads"
         main(): # 工作流入口必然是main
             steps:
+              # main()中: 如果 flip-coin() == heads，则调用 heads()，否则递归调用 main()
               - - flip-coin()
-                - template: heads() # call heads template if "heads"
-                  when: "${flip-coin.result} == heads"
-                - template: flip-coin() # keep flipping coins if "tails"
-                  when: "${flip-coin.result} == tails"
+              - - when: "${flip-coin.result} == heads"
+                  template: heads() # call heads template if "heads"
+
+                - when: "${flip-coin.result} == tails"
+                  template: main() # keep flipping coins if "tails"
+
 
 
 

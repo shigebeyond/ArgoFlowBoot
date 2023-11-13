@@ -1,0 +1,20 @@
+# https://argoproj.github.io/argo-workflows/walk-through/timeouts/
+- flow(timeouts-test):
+    - spec:
+        activeDeadlineSeconds: 5 # terminate workflow after 5 seconds
+    - templates:
+        main(): # 工作流入口必然是main
+            container:
+                command: echo sleeping for 1m; sleep 20; echo done
+        # 超过期限(死期), on-exit 也是执行失败，但是cry是调用到了(有输出boohoo!)
+        exit(): # 退出处理
+            steps:
+                - - when: "{{workflow.status}} != Succeeded"
+                    template: cry
+        cry():
+            container:
+                command: echo boohoo!
+
+
+
+

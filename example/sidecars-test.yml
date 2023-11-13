@@ -1,0 +1,16 @@
+# https://argoproj.github.io/argo-workflows/walk-through/sidecars/
+- flow(sidecars-test):
+    - templates:
+        main(): # 工作流入口必然是main，要放最后
+            container:
+                # Try to read from nginx web server until it comes up
+                command: until `curl -G 'http://127.0.0.1/' >& /tmp/out`; do echo sleep && sleep 1; done && cat /tmp/out
+            # Create a simple nginx web server
+            sidecars:
+              nginx:
+                  image: nginx
+                  command: [ nginx, -g, daemon off; ]
+
+
+
+

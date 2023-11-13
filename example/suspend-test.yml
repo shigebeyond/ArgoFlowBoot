@@ -3,18 +3,15 @@
     - templates:
         approve():
             suspend:
-        delay():
-            suspend: 20 # Must be a string. Default unit is seconds. Could also be a Duration, e.g.: "2m", "6h"
-        whalesay():
+        delay(sec):
+            suspend: $sec # Must be a string. Default unit is seconds. Could also be a Duration, e.g.: "2m", "6h"
+        whalesay(msg):
             container:
-                commmand: cowsay "hello world"
+                command: cowsay $msg
         main(): # 工作流入口必然是main
             steps:
-            -   - whalesay()
-                - approve()
-                - delay() # 暂停
-                - whalesay() # 恢复
-
-
-
-
+            - - whalesay(start)
+            - - approve() # 暂停：要手动恢复 argo resume WORKFLOW
+            - - whalesay(resume1) # 恢复
+            - - delay(5) # 暂停n秒：到点自动恢复
+            - - whalesay(resume2) # 恢复

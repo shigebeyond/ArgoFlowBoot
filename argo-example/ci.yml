@@ -1,39 +1,71 @@
 # argo-workflows/examples/ci.yaml
 - flow(ci):
     - args:
-        revision: cfe12d6
-        '@code': # 共享文件(工件)
-            path: /go/src/github.com/golang/example
-            git:
-              repo: https://github.com/golang/example.git
-              revision: "{{inputs.parameters.revision}}"
+        #revision: cfe12d6
+        revision: master
     - vc_templates: # 共享的pvc, 所有任务的容器都会挂载
-       - workdir:/go:1Gi # pvc名:挂载路径:空间大小
+       - workdir:/code:1Gi # pvc名:挂载路径:空间大小
     - templates:
-        build-golang-example(revision,@code):
+        build(): # 1 编译golang-example
+            in:
+              revision:
+              '@code':
+                 path: /code/argo-example
+                 git:
+                   #repo: https://github.com/golang/example.git
+                   repo: https://gitee.com/shigebeyond/ArgoFlowBoot
+                   revision: $revision
             container:
               image: golang:1.8
               command: |
-                    cd /go/src/github.com/golang/example/hello &&
+                    cd /code/argo-example/hello &&
                     git status &&
                     go build -v .
-        run-hello(image):
+        run(image): # 2 运行golang-example
             container:
               image: $image
               command: |
                     uname -a ;
                     cat /etc/os-release ;
-                    /go/src/github.com/golang/example/hello/hello
+                    /code/argo-example/hello/hello
         main(revision): # 工作流入口必然是main
             steps:
-              - build-golang-example($revision)
-              - template: run-hello({{item.image}}:{{item.tag}})
+            - - build($revision)
+            - - template: run({{item.image}}:{{item.tag}})
                 withItems:
                     - { image: 'debian', tag: '9.1' }
                     - { image: 'alpine', tag: '3.6' }
-                    - { image: 'ubuntu', tag: '17.10' }
 
-
-
-
-
+- flow(ci2):
+    - set_vars:
+        default-code:
+          path: /code/argo-example
+          git:
+            repo: https://gitee.com/shigebeyond/ArgoFlowBoot
+            revision: '{{inputs.parameters.revision}}'
+    - args:
+        revision: cfe12d6
+    - vc_templates: # 共享的pvc, 所有任务的容器都会挂载
+       - workdir:/code:1Gi # pvc名:挂载路径:空间大小
+    - templates:
+        build(revision,@code=$default-code): # 1 编译golang-example
+            container:
+              image: golang:1.8
+              command: |
+                    cd /code/argo-example/hello &&
+                    git status &&
+                    go build -v .
+        run(image): # 2 运行golang-example
+            container:
+              image: $image
+              command: |
+                    uname -a ;
+                    cat /etc/os-release ;
+                    /code/argo-example/hello/hello
+        main(revision): # 工作流入口必然是main
+            steps:
+            - - build($revision)
+            - - template: run({{item.image}}:{{item.tag}})
+                withItems:
+                    - { image: 'debian', tag: '9.1' }
+                    - { image: 'alpine', tag: '3.6' }

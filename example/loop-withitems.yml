@@ -1,0 +1,32 @@
+# https://argoproj.github.io/argo-workflows/walk-through/loops/
+- flow(loop-withitems):
+    - templates:
+        whalesay(msg):
+            container:
+              command: cowsay $msg
+        main(): # 工作流入口必然是main，要放最后
+            steps:
+            - - template: whalesay({{item}})
+#           -  - template:
+#                  - whalesay
+#                  - '{{item}}'
+                withItems: # invoke whalesay once for each item in parallel
+                  - hello world   # item 1
+                  - goodbye world # item 2
+
+# withitems + map
+- flow(loop-withitems-map):
+    - templates:
+        cat-os-release(image,tag):
+            container:
+              image: $image:$tag
+              command: cat /etc/os-release
+        main(): # 工作流入口必然是main，要放最后
+            steps:
+              # parameter specifies the list to iterate over
+            - - template: cat-os-release({{item.image}},{{item.tag}})
+                withItems:
+                  - { image: 'debian', tag: '9.1' }       #item set 1
+                  - { image: 'debian', tag: '8.9' }       #item set 2
+                  - { image: 'alpine', tag: '3.6' }       #item set 3
+                  - { image: 'ubuntu', tag: '17.10' }     #item set 4
