@@ -4,6 +4,7 @@
 import json
 import os
 import re
+from K8sBoot.boot import Boot as K8sBoot
 from pyutilb.util import *
 from pyutilb.file import *
 from pyutilb.cmd import *
@@ -48,15 +49,6 @@ class Boot(YamlBoot):
             'templates': self.templates,
         }
         self.add_actions(actions)
-
-        # 自定义函数
-        funcs = {
-            'ref_pod_field': self.ref_pod_field,
-            'ref_resource_field': self.ref_resource_field,
-            'ref_config': self.ref_config,
-            'ref_secret': self.ref_secret,
-        }
-        custom_funs.update(funcs)
 
         # flow作用域的属性，跳出flow时就清空
         self._flow = '' # 流程名
@@ -318,16 +310,44 @@ class Boot(YamlBoot):
         }
 
     def build_container_body(self, option):
-        ret = {
-            "image": get_and_del_dict_item(option, "image", self.get_default_image(option)),
-            "command": self.fix_command(get_and_del_dict_item(option, "command")),
-            "args": self.fix_command_args(get_and_del_dict_item(option, "args")),
-            "volumeMounts": self._mounts,
-            "env": self.build_env(get_and_del_dict_item(option, 'env')),
-            **option
-        }
-        del_dict_none_item(ret)
+        # imagePullPolicy置空
+        if 'imagePullPolicy' not in option:
+            option['imagePullPolicy'] = None
+        # 默认镜像
+        if 'image' not in option:
+            option['image'] = self.get_default_image(option)
+        # 调用k8sboot来构建容器
+        ret = K8sBoot('.').build_container(None, option)
+        # 添加vc模板的挂载
+        if self._mounts:
+            if "volumeMounts" not in ret:
+                ret["volumeMounts"] = {}
+            ret["volumeMounts"].update(self._mounts)
         return ret
+
+    def build_script(self, option):
+        '''
+        构建script模板，参考 https://argoproj.github.io/argo-workflows/walk-through/scripts-and-results/
+        :param option:
+        :return:
+        '''
+        # 默认命令
+        if 'command' not in option:
+            option['command'] = ["bash"]
+        if isinstance(option['command'], str):
+            option['command'] = [option['command']]
+        # 源码
+        if 'file' in option:
+            option["source"] = read_file(get_and_del_dict_item(option, "file"))
+        return {
+            "script": self.build_container_body(option)
+        }
+
+    def wrap_build_python(self, version):
+        def wrapper(option):
+            option['command'] = f'python{version}'
+            return self.build_script(option)
+        return wrapper
 
     # 构建边车模板
     def build_sidecars(self, option: dict):
@@ -352,7 +372,7 @@ class Boot(YamlBoot):
         # 解析函数调用
         name, args = parse_func(name, True)
         # 构建输入
-        inputs = {}
+        inputs = None
         if args: # 函数调用形式的入参
             inputs = self.build_list_args(args, 'inputs') # 构建输入，会增加变量
         else: # 显示定义`in`的入参
@@ -386,6 +406,8 @@ class Boot(YamlBoot):
 
     # 收集inputs中的参数名
     def build_input_names(self, inputs):
+        if not inputs:
+            return []
         params = inputs.get("parameters") or []
         arts = inputs.get("artifacts") or []
         return [e['name'] for e in params + arts]
@@ -609,17 +631,6 @@ class Boot(YamlBoot):
             "value": value
         }
 
-    def fix_command(self, cmd):
-        if isinstance(cmd, str):
-            # return re.split('\s+', cmd)  # 空格分割
-            return ["/bin/sh", "-c", cmd] # sh修饰，不用bash(busybox里没有bash)
-        return cmd
-
-    def fix_command_args(self, args):
-        if isinstance(args, str):
-            return [args]
-        return args
-
     def build_steps(self, steps: Union[str, list]):
         '''
         构建steps, 参考 https://argoproj.github.io/argo-workflows/walk-through/steps/
@@ -725,39 +736,6 @@ class Boot(YamlBoot):
 
         args = dict(zip(names, vals))
         return self.build_dict_args(args, 'call')
-
-    def build_script(self, option):
-        '''
-        构建script模板，参考 https://argoproj.github.io/argo-workflows/walk-through/scripts-and-results/
-        :param option:
-        :return:
-        '''
-        image = get_and_del_dict_item(option, "image", self.get_default_image(option))
-        # 命令
-        cmd = get_and_del_dict_item(option, "command", "bash")
-        if isinstance(cmd, str):
-            cmd = [cmd]
-        # 源码
-        src = get_and_del_dict_item(option, "source")
-        if 'file' in option:
-            src = read_file(get_and_del_dict_item(option, "file"))
-        ret = {
-            "script": {
-                "image": image,
-                "command": cmd,
-                "source": src,
-                "env": self.build_env(get_and_del_dict_item(option, 'env')),
-                **option
-            }
-        }
-        del_dict_none_item(ret["script"])
-        return ret
-
-    def wrap_build_python(self, version):
-        def wrapper(option):
-            option['command'] = f'python{version}'
-            return self.build_script(option)
-        return wrapper
 
     def build_suspend(self, option):
         if not option:
@@ -874,75 +852,6 @@ class Boot(YamlBoot):
         if dep_nodes:
             task["dependencies"] = list(map(self.namer.get_name, dep_nodes))
         return task
-
-    # --------------------- 抄 K8sBoot 的实现 ---------------------
-    # 构建容器中的环境变量
-    def build_env(self, env):
-        if env is None or len(env) == 0:
-            return None
-
-        ret = []
-        for key, val in env.items():
-            item = {
-                "name": key,
-            }
-            if isinstance(val, (str, int, float)):
-                item["value"] = str(val)
-            else:
-                item["valueFrom"] = val
-            ret.append(item)
-        return ret
-
-    def ref_pod_field(self, field):
-        '''
-        在给环境变量赋时值，注入Pod信息
-          参考 https://blog.csdn.net/skh2015java/article/details/109229107
-        :param field Pod信息字段，仅支持 metadata.name, metadata.namespace, metadata.uid, spec.nodeName, spec.serviceAccountName, status.hostIP, status.podIP, status.podIPs
-        '''
-        return {
-            "fieldRef": {
-                "fieldPath": field
-            }
-        }
-
-    def ref_resource_field(self, field):
-        '''
-        在给环境变量赋值时，注入容器资源信息
-          参考 https://blog.csdn.net/skh2015java/article/details/109229107
-        :param field 容器资源信息字段，仅支持 requests.cpu, requests.memory, limits.cpu, limits.memory
-        '''
-        return {
-            "resourceFieldRef": {
-                "containerName": self._curr_container,
-                "resource": field
-            }
-        }
-
-    def ref_config(self, key):
-        '''
-        在给环境变量赋值时，注入配置信息
-        :param key
-        '''
-        name, key = key.split('.')
-        return {
-            "configMapKeyRef":{
-              "name": name, # The ConfigMap this value comes from.
-              "key": key # The key to fetch.
-            }
-        }
-
-    def ref_secret(self, key):
-        '''
-        在给环境变量赋值时，注入secret信息
-        :param key
-        '''
-        name, key = key.split('.')
-        return {
-            "secretKeyRef":{
-              "name": name, # The Secret this value comes from.
-              "key": key # The key to fetch.
-            }
-        }
 
 # cli入口
 def main():
