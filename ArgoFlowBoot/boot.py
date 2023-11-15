@@ -39,6 +39,7 @@ class Boot(YamlBoot):
         self.stat_dump = False
         # 动作映射函数
         actions = {
+            'flow_template': self.flow_template,
             'flow': self.flow,
             'labels': self.labels,
             'spec': self.spec,
@@ -66,7 +67,7 @@ class Boot(YamlBoot):
         self._template_inputs = {} # 记录模板的输入参数名
         self._template_outputs = {} # 记录模板的输出参数名
         self._vc_templates = None # 记录vs模板
-        self._vc_mounts = {} # 记录vs挂载路径，key是vc名，value是挂载路径
+        self._mounts = {} # 记录vs挂载路径，key是vc名，value是挂载路径
 
         # 任务命名者
         self.namer = FuncIncrTaskNamer()
@@ -98,7 +99,7 @@ class Boot(YamlBoot):
         self._template_inputs = {} # 记录模板的输入参数名
         self._template_outputs = {} # 记录模板的输出参数名
         self._vc_templates = None # 记录vs模板
-        self._vc_mounts = {} # 记录vs挂载路径，key是vc名，value是挂载路径
+        self._mounts = {} # 记录vs挂载路径，key是vc名，value是挂载路径
         clear_vars('*') # 清理全部变量
         self.namer = FuncIncrTaskNamer() # 重置命名器，因为他内部有状态(计数)
 
@@ -132,7 +133,10 @@ class Boot(YamlBoot):
         log.info(cmd)
 
     # --------- 动作处理的函数 --------
-    def flow(self, steps, name=None):
+    def flow_template(self, steps, name=None):
+        self.flow(steps, name, True)
+
+    def flow(self, steps, name=None, is_flow_template=False):
         '''
         声明工作流，并执行子步骤
         :param steps 子步骤
@@ -148,7 +152,7 @@ class Boot(YamlBoot):
         # 执行子步骤
         self.run_steps(steps)
         # 生成flow
-        self.build_flow()
+        self.build_flow(is_flow_template)
         # 打印 kubectl apply 命令
         self.print_submit_cmd()
         # 清空app相关的属性
@@ -169,7 +173,7 @@ class Boot(YamlBoot):
         # 合并标签
         return dict(lbs, **self._labels)
 
-    def build_flow(self):
+    def build_flow(self, is_flow_template):
         # 入口为main
         entrypoint = "main"
         if entrypoint not in self._templates:
@@ -178,10 +182,13 @@ class Boot(YamlBoot):
         exit_handler = None
         if 'exit' in self._templates:
             exit_handler = 'exit'
-
+        if is_flow_template:
+            kind = "WorkflowTemplate"
+        else:
+            kind = "Workflow"
         yaml = {
             "apiVersion": "argoproj.io/v1alpha1",
-            "kind": "Workflow",
+            "kind": kind,
             "metadata": {
                 "generateName": self._flow + '-',
                 "labels": self.build_labels()
@@ -204,54 +211,52 @@ class Boot(YamlBoot):
         del_dict_none_item(yaml["spec"])
         self.save_yaml(yaml)
 
-    def build_volume_mounts(self):
-        if not self._vc_mounts:
-            return None
-        return [{ "name": k, "mountPath": v } for k, v in self._vc_mounts.items()]
-
     @replace_var_on_params
-    def vc_templates(self, mounts):
+    def vc_templates(self, vcs):
         '''
         构建持久卷声明
-        :params mounts 多行，格式为
-                    work:/work:1Gi 定义名为work的PVC存储，请求了 1GB 的存储空间，并挂载到容器的/work
+        :params vcs dict, key是vc模板名, value是{size, mount}
+                       size是pvc的存储空间大小
+                       mount可以是str，表示整体挂载到容器中的路径名，也可以是dict，key是pvc子路径，value是挂载到容器内路径
+                       如 work: {mount: /work, size: 1Gi} 定义名为work的pvc模板，请求了 1GB 的存储空间，并挂载到容器的/work
         '''
-        if mounts is None or len(mounts) == 0:
+        if vcs is None or len(vcs) == 0:
             return None
-        if isinstance(mounts, str):
-            mounts = [mounts]
-
         self._vc_templates = []
-        for mount in mounts:
-            # 1 默认名为work
-            if ':' not in mount:
-                mount = f"work://:{mount}"
-            # 2 拆分2段或3段
-            parts = mount.split(':', 2)
-            if len(parts) == 2:
-                name, mount_path = parts
-                storage = '100Mi' # 默认请求 100M 空间
-            else:
-                name, mount_path, storage = parts
-            # 构建vc
+        for name, option in vcs.items():
+            # 先去掉mount, 下一步处理
+            mounts = get_and_del_dict_item(option, 'mount')
+            # 1 构建vc
             vc = {
                 "metadata": {
                     "name": name
                 },
                 "spec": {
-                    "accessModes": ["ReadWriteOnce"],
+                    "accessModes": get_and_del_dict_item(option, "accessModes", ["ReadWriteOnce"]), # 访问模式
                     "resources": {
                         "requests": {
-                            "storage": storage
+                            "storage": get_and_del_dict_item(option, 'size', '100Mi')  # 空间大小， 默认100M
                         }
-                    }
+                    },
+                    **option
                 }
             }
             self._vc_templates.append(vc)
 
-            # 3 记录挂载路径
-            self._vc_mounts[name] = mount_path
-            set_var(name, mount_path) # 设变量
+            # 2 处理mount
+            # str，表示整体挂载到容器中的路径名
+            # dict，key是pvc子路径，value是挂载到容器内路径
+            if isinstance(mounts, str):
+                mounts = {'': mounts}
+            for sub_path, mount_path in mounts.items():
+                mount = {
+                    "name": name,
+                    "mountPath": mount_path
+                }
+                if sub_path:
+                    mount['subPath'] = sub_path
+                self._mounts[name] = mount
+            set_var(name, mounts) # 设变量
 
     # 流程的其他配置
     @replace_var_on_params
@@ -317,7 +322,7 @@ class Boot(YamlBoot):
             "image": get_and_del_dict_item(option, "image", self.get_default_image(option)),
             "command": self.fix_command(get_and_del_dict_item(option, "command")),
             "args": self.fix_command_args(get_and_del_dict_item(option, "args")),
-            "volumeMounts": self.build_volume_mounts(),
+            "volumeMounts": self._mounts,
             "env": self.build_env(get_and_del_dict_item(option, 'env')),
             **option
         }
@@ -347,6 +352,7 @@ class Boot(YamlBoot):
         # 解析函数调用
         name, args = parse_func(name, True)
         # 构建输入
+        inputs = {}
         if args: # 函数调用形式的入参
             inputs = self.build_list_args(args, 'inputs') # 构建输入，会增加变量
         else: # 显示定义`in`的入参
