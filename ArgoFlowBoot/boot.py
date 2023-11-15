@@ -59,7 +59,7 @@ class Boot(YamlBoot):
         self._template_inputs = {} # 记录模板的输入参数名
         self._template_outputs = {} # 记录模板的输出参数名
         self._vc_templates = None # 记录vs模板
-        self._mounts = {} # 记录vs挂载路径，key是vc名，value是挂载路径
+        self._vc_mounts = [] # 记录vs挂载路径
 
         # 任务命名者
         self.namer = FuncIncrTaskNamer()
@@ -91,7 +91,7 @@ class Boot(YamlBoot):
         self._template_inputs = {} # 记录模板的输入参数名
         self._template_outputs = {} # 记录模板的输出参数名
         self._vc_templates = None # 记录vs模板
-        self._mounts = {} # 记录vs挂载路径，key是vc名，value是挂载路径
+        self._vc_mounts = [] # 记录vs挂载路径
         clear_vars('*') # 清理全部变量
         self.namer = FuncIncrTaskNamer() # 重置命名器，因为他内部有状态(计数)
 
@@ -247,8 +247,14 @@ class Boot(YamlBoot):
                 }
                 if sub_path:
                     mount['subPath'] = sub_path
-                self._mounts[name] = mount
-            set_var(name, mounts) # 设变量
+                self._vc_mounts.append(mount)
+
+            # 设变量
+            key1 = get_dict_first_key(mounts)
+            if key1 == '': # 整体挂载
+                set_var(name, mounts[key1])
+            else: # 子路径挂载
+                set_var(name, mounts)
 
     # 流程的其他配置
     @replace_var_on_params
@@ -291,6 +297,9 @@ class Boot(YamlBoot):
         if isinstance(cmd, list):
             cmd = cmd[0]
         cmd = cmd.strip()
+        if cmd == 'bash':
+            return 'bash'
+
         if cmd.startswith('python'):
             version = re.search(r'^python([\d\.]+)?', cmd).group(1) or '3.6' # 从命令中获得python版本，缺省为3.6
             return f"python:alpine{version}"
@@ -311,18 +320,18 @@ class Boot(YamlBoot):
 
     def build_container_body(self, option):
         # imagePullPolicy置空
-        if 'imagePullPolicy' not in option:
-            option['imagePullPolicy'] = None
+        # if 'imagePullPolicy' not in option:
+        #     option['imagePullPolicy'] = None
         # 默认镜像
         if 'image' not in option:
             option['image'] = self.get_default_image(option)
         # 调用k8sboot来构建容器
         ret = K8sBoot('.').build_container(None, option)
         # 添加vc模板的挂载
-        if self._mounts:
+        if self._vc_mounts:
             if "volumeMounts" not in ret:
-                ret["volumeMounts"] = {}
-            ret["volumeMounts"].update(self._mounts)
+                ret["volumeMounts"] = []
+            ret["volumeMounts"] += self._vc_mounts
         return ret
 
     def build_script(self, option):
@@ -333,7 +342,7 @@ class Boot(YamlBoot):
         '''
         # 默认命令
         if 'command' not in option:
-            option['command'] = ["bash"]
+            option['command'] = "bash"
         if isinstance(option['command'], str):
             option['command'] = [option['command']]
         # 源码
@@ -678,10 +687,11 @@ class Boot(YamlBoot):
         # 解析步骤名
         if isinstance(template, str) and '=' in template:  # 遇到有=，则 步骤名=模板调用
             # name, template = template.split('=') # 检查分割, 不能处理参数带=的情况
-            mat = re.search(r'^([^\(]+)=', template) # 正则分割
+            reg = r'^([^\(]+)='
+            mat = re.search(reg, template) # 正则分割
             if mat is not None:
                 name = mat.group(1)
-                template = template.replace(name, '')
+                template = re.sub(reg, '', template)
         if name is None:
             name = step.get('name')
             # 根据模板表达式自动命名步骤，必须根据模板+参数，不能根据解析后的模板(只有函数名, 不带参数, 无法确定唯一名)
