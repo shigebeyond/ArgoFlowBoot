@@ -1,1 +1,2 @@
 pyutilb >= 1.0.6
+K8sBoot >= 1.0.0

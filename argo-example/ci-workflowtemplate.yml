@@ -1,0 +1,83 @@
+- set_vars:
+    GOMODCACHE:
+      path: /mnt/GOMODCACHE
+      s3:
+        key: "ci-workflowtemplate/{{workflow.parameters.branch}}/GOMODCACHE"
+    GOCACHE:
+      path: /mnt/GOCACHE
+      s3:
+        key: "ci-workflowtemplate/{{workflow.parameters.branch}}/GOCACHE"
+
+# argo-workflows/examples/ci-workflowtemplate.yaml
+- flow_template(ci-workflowtemplate):
+    - args:
+        branch: master
+    - vc_templates: # 共享的pvc, 所有任务的容器都会挂载
+        workdir: # pvc名
+          size: 64Mi # 空间大小
+          mount: # 挂载路径
+            mod: /go/pkg/mod
+            cache: /root/.cache/go-build
+            src: /src
+    - templates:
+        cache-restore(@GOMODCACHE=$GOMODCACHE,@GOCACHE=$GOCACHE): # 1 从工件中恢复编译缓存
+            container:
+              image: golang:1.8
+              workingDir: /src
+              command: |
+                      mkdir -p $(go env GOMODCACHE)
+                      [ -e /mnt/GOMODCACHE ] && cp -Rf /mnt/GOMODCACHE $(go env GOMODCACHE)
+                      mkdir -p $(go env GOCACHE)
+                      [ -e /mnt/GOCACHE ] &&  cp -Rf /mnt/GOCACHE $(go env GOCACHE)
+        exit(): # 2 保存编译缓存到工件中
+            container:
+              image: golang:1.8
+              workingDir: /src
+            out:
+              '@GOMODCACHE':
+                path: /go/pkg/mod
+                s3:
+                  key: "ci-workflowtemplate/$branch/GOMODCACHE"
+              '@GOCACHE':
+                path: /root/.cache/go-build
+                s3:
+                  key: "ci-workflowtemplate/$branch/GOCACHE"
+        clone(): # 3 克隆代码
+            container:
+              image: golang:1.8
+              workingDir: /src
+              command: |
+                    git clone -v -b "{{workflow.parameters.branch}}" --single-branch --depth 1 https://github.com/golang/example.git .
+        dep(): # 4 下载依赖
+            container:
+              image: golang:1.8
+              workingDir: /src
+              command: |
+                    go mod download -x
+        build(): # 5 编译
+            container:
+              image: golang:1.8
+              workingDir: /src
+              # ./... 是一个通配符，表示当前目录及其子目录下的所有包。它会递归地构建当前目录及其子目录下的所有Go包
+              command: |
+                    go build ./...
+        test(): # 6 测试
+            container:
+              image: golang:1.8
+              workingDir: /src
+              command: |
+                    go install github.com/jstemmer/go-junit-report@latest
+                    go install github.com/alexec/junit2html@v0.0.2
+                    trap 'cat test.out | go-junit-report | junit2html > test-report.html' EXIT
+                    go test -v ./... 2>&1 > test.out
+            out:
+              '@test-report':
+                  path: /src/test-report.html
+                  archive:
+                    none: { }
+                  s3:
+                    key: "$branch/test-report.html"
+
+        main(): # 工作流入口必然是main
+          dag: # 依赖关系
+            - cache-restore();clone() -> deps() -> build() -> test()

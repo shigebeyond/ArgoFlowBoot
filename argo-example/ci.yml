@@ -4,7 +4,9 @@
         #revision: cfe12d6
         revision: master
     - vc_templates: # 共享的pvc, 所有任务的容器都会挂载
-       - workdir:/code:1Gi # pvc名:挂载路径:空间大小
+       workdir: # pvc名
+         size: 1Gi # 空间大小
+         mount: /code # 挂载路径
     - templates:
         build(): # 1 编译golang-example
             in:
@@ -38,7 +40,7 @@
 
 - flow(ci2):
     - set_vars:
-        default-code:
+        vcode:
           path: /code/ArgoFlowBoot
           git:
             repo: https://gitee.com/shigebeyond/ArgoFlowBoot
@@ -46,9 +48,11 @@
     - args:
         revision: cfe12d6
     - vc_templates: # 共享的pvc, 所有任务的容器都会挂载
-       - workdir:/code:1Gi # pvc名:挂载路径:空间大小
+        workdir: # pvc名
+          size: 1Gi # 空间大小
+          mount: /code # 挂载路径
     - templates:
-        build(revision,@code=$default-code): # 1 编译golang-example
+        build(revision,@code=$vcode): # 1 编译golang-example
             container:
               image: golang:1.8
               command: |

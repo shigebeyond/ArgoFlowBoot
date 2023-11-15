@@ -8,7 +8,9 @@
               repo: https://github.com/golang/example.git
               revision: "{{inputs.parameters.revision}}"
     - vc_templates: # 共享的pvc, 所有任务的容器都会挂载
-       - workdir:/go:1Gi # pvc名:挂载路径:空间大小
+        workdir: # pvc名
+          mount: /code # 挂载路径
+          size: 1Gi # 空间大小
     - templates:
         build-golang-example(revision,@code):
             container:
