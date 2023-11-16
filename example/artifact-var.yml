@@ -1,7 +1,7 @@
 # artifact入参带默认值： 通过变量的方式
 - flow(artifact-var):
     - set_vars:
-        'source-opt':
+        source-opt:
             path: /src # 可省，默认路径为 /tmp/artifacts/工件名
             git:
                 repo: https://gitee.com/argoproj/argo-workflows.git

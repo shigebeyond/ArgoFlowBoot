@@ -1,5 +1,7 @@
 # https://argoproj.github.io/argo-workflows/walk-through/parameters/
 - flow(input-test):
+#    - spec: # 其他配置
+#        serviceAccountName: argo
     - args: # 流程级参数
         msg: hello world
     - templates:

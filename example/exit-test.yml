@@ -10,7 +10,7 @@
         cry():
             container:
                 command: echo boohoo!
-        exit(): # 退出处理
+        onexit(): # 退出处理
             steps:
               # main()后: send-email()，如果成功，则celebrate()，否则cry()
               - - send-email()

@@ -17,7 +17,8 @@
             - - print-message(${whalesay.@hello-art}) # 将上一个写的，传递给下一个调用中
             out: # 输出
               stepresult:
-                expression: "steps.print-message.outputs.result"
+                #expression: "steps.print-message.outputs.result" # 执行报错，print-message不是正常的属性命名，需用[]来访问
+                expression: "steps['print-message'].outputs.result"
 
 # 更简洁
 - flow(artifact-test2):

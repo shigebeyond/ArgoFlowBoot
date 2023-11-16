@@ -1,0 +1,19 @@
+# https://argoproj.github.io/argo-workflows/key-only-artifacts/
+# 必须先配置通用的引用仓库，参考 https://argoproj.github.io/argo-workflows/artifact-repository-ref/
+- flow(artifact-key):
+    - set_vars:
+        file:
+          path: /mnt/file
+          s3:
+            key: my-file
+    - templates:
+        generate(): # 写工件
+            container:
+              command: cowsay hello world > ${file.path}
+            out:
+              '@art': $file
+        consume(@art=$file): # 读工件
+            container:
+              command: cat ${@art.path}
+        main():
+            dag: generate() -> consume()

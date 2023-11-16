@@ -1,0 +1,11 @@
+# https://argoproj.github.io/argo-workflows/cron-workflows/
+- flow(cron-test):
+    - templates:
+        main(): # 工作流入口必然是main
+            container:
+              command: date
+    - cron: # 定时选项
+          schedule: "* * * * *"
+          concurrencyPolicy: "Replace"
+          startingDeadlineSeconds: 0
+
