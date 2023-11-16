@@ -441,15 +441,15 @@ class Boot(YamlBoot):
         self._template_inputs[name] = get_and_del_dict_item(inputs, 'name')
         if 'steps' not in option: # steps延迟替换变量, 因为下一步的输入变量会依赖上一步的输出
             option = replace_var(option, False) # 替换变量
+        # 构建主体
+        body = self.build_template_body(option)
+        if body is None:
+            raise Exception(f'不确定任务[{name}]的类型')
         # 构建输出
         out = get_and_del_dict_item(option, 'out')
         outputs = self.build_dict_args(out, 'outputs') # 构建输出
         if out: # 记录模板的输出参数名
             self._template_outputs[name] = out.keys()
-        # 构建主体
-        body = self.build_template_body(option)
-        if body is None:
-            raise Exception(f'不确定任务[{name}]的类型')
         tpl = {
             "name": name,
             "inputs": inputs,
@@ -465,9 +465,9 @@ class Boot(YamlBoot):
     def build_input_vars(self, type, k, v=None):
         if k.startswith('@'):  # artifacts
             if type == 'flow-args':
-                set_var(k, ArtifactProxy(v, '{{workflow.artifacts.' + k.replace('@', '') + '}}')) # {{workflow.artifacts.art_name}}
+                set_var(k, ArtifactProxy(v, '{{workflow.artifacts.' + k[1:] + '}}')) # {{workflow.artifacts.art_name}}
             elif type == 'inputs' and get_var(k, False) is None:
-                set_var(k, ArtifactProxy(v, '{{inputs.artifacts.' + k.replace('@', '') + '}}')) # {{inputs.artifacts.source}}
+                set_var(k, ArtifactProxy(v, '{{inputs.artifacts.' + k[1:] + '}}')) # {{inputs.artifacts.source}}
             return
 
         # parameters
@@ -633,30 +633,51 @@ class Boot(YamlBoot):
         '''
         key = key.replace('@', '')
 
-        # 1 用户填的
-        if value:
-            # 1.1 有明细配置dict
-            if isinstance(value, dict):
-                ret = {
-                    "name": key,
-                    **value
-                }
-            else: # 1.2 单值
-                ret = {
-                    "name": key,
-                    "path": value
-                }
+        # 如果用户没填，则默认用流程级同名参数
+        if not value:
+            return {
+                "name": key,
+            }
 
-            # 1.3 对调用模板要修正属性: path换from, 如 from: "{{steps.generate-artifact.outputs.artifacts.etc}}"
-            if type == 'call' and 'path' in ret:
-                ret = ret.copy()
-                ret['from'] = get_and_del_dict_item(ret, 'path')
-            return ret
+        # 用户有填
+        # 1 有明细配置dict
+        if isinstance(value, dict):
+            ret = {
+                "name": key,
+                **value
+            }
+        else: # 2 单值
+            ret = {
+                "name": key,
+                "path": value
+            }
 
-        # 2 如果用户没填，则默认用流程级同名参数
-        return {
-            "name": key,
-        }
+        # 3 对调用模板要修正属性: path转from, 如 from: "{{steps.generate-artifact.outputs.artifacts.etc}}"
+        if type == 'call' and 'path' in ret:
+            ret['from'] = get_and_del_dict_item(ret, 'path')
+        # 4 对输出修正属性: expression转fromExpression, 如 fromExpression: "steps['flip-coin'].outputs.result == 'heads' ? steps.heads.outputs.artifacts.headsresult : steps.tails.outputs.artifacts.tailsresult"
+        elif type == 'outputs' and 'expression' in ret:
+            ret['fromExpression'] = get_and_del_dict_item(ret, 'expression')
+
+        # 修正表达式
+        if 'fromExpression' in ret:
+            ret['fromExpression'] = self.fix_expression(ret['fromExpression'])
+        return self.fix_expression(ret)
+
+    def fix_expression(self, expr):
+        '''
+        如果expression的值用了变量，如 ${flip-coin.result} == 'heads' ? ${heads.result} : ${tails.result}
+        会替换为 {{steps.flip-coin.outputs.result}} == ''heads'' ? {{steps.heads.outputs.result}} : {{steps.tails.outputs.result}}
+        而我想要的是 steps['flip-coin'].outputs.result == 'heads' ? steps.heads.outputs.result : steps.tails.outputs.result
+        => 1 非正常的变量命名，如包含-，如flip-coin，不能用.访问，需用[]来访问
+           2 干掉 {{ 与 }}
+        :param expr:
+        :return: 
+        '''
+        # 1 解析出 {{ 与 }} 包含的内容
+        # 2 对 steps.flip-coin.outputs 或 tasks.flip-coin.outputs 中间一段 .flip-coin 替换为 ['flip-coin']
+        # re.sub(r'\{\{[^\}]\}\}')
+        return expr.replace('{{', '').replace('}}', '')
 
     # 构建模板的输入参数
     def build_params(self, option):
@@ -683,6 +704,9 @@ class Boot(YamlBoot):
                 "name": key
             }
         if isinstance(value, dict):
+            # value 如 expression: "steps['flip-coin'].outputs.result == 'heads' ? steps.heads.outputs.result : steps.tails.outputs.result"
+            if 'expression' in value:
+                value['expression'] = self.fix_expression(value['expression'])
             return {
                 "name": key,
                 "valueFrom": value
@@ -805,7 +829,7 @@ class Boot(YamlBoot):
         '''
         构建steps调用的输出变量
         :param tpl_name:
-        :param step_name:
+        :param step_name: 步骤名作为变量名，变量值是输出参数的dict
         :param type: 类型： 1 steps 2 tasks(dag)，用做输出变量的前缀，如
                      steps: {{steps.generate.outputs.artifacts.out-artifact}}
                      tasks: {{tasks.generate-artifact.outputs.artifacts.hello-art}}
@@ -813,7 +837,7 @@ class Boot(YamlBoot):
         '''
         # 输出参数名
         names = self._template_outputs.get(tpl_name)
-        # 遍历输出的参数，来设置变量
+        # 遍历输出的参数，来构建变量值
         vals = {}
         if names:
             for name in names:
@@ -822,9 +846,10 @@ class Boot(YamlBoot):
                 else:  # parameters: {{steps.generate.outputs.parameters.out-parameter}}
                     val = '{{' + type + '.' + step_name + '.outputs.parameters.' + name + '}}'
                 vals[name] = val
-        # 设置result变量，注：不建议输出参数名用result
+        # 设置result变量值，注：不建议输出参数名用result
         if 'result' not in vals:
             vals['result'] = '{{' + type + '.' + step_name + '.outputs.result}}'
+        # 设置变量: 步骤名作为变量名，变量值是输出参数的dict
         set_var(step_name, vals)
 
     def build_suspend(self, option):
@@ -884,7 +909,7 @@ class Boot(YamlBoot):
 
         # 1 根据依赖关系表达式，来构建任务
         if 'deps' in option:
-            return self.build_dag_deps(option['deps'])
+            return self.build_dag_deps(option)
 
         # 2 直接构建任务
         return self.build_dag_tasks(option)
@@ -905,7 +930,8 @@ class Boot(YamlBoot):
         }
 
     # 根据依赖关系表达式，来构建任务
-    def build_dag_deps(self, deps: list):
+    def build_dag_deps(self, option: dict):
+        deps = get_and_del_dict_item(option, 'deps')
         tasks = []
         for dep in deps:
             # 去掉空格
@@ -927,7 +953,8 @@ class Boot(YamlBoot):
                     tasks.append(task)
         return {
             "dag": {
-                "tasks": tasks
+                "tasks": tasks,
+                **option
             }
         }
 
