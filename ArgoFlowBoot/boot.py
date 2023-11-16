@@ -658,7 +658,6 @@ class Boot(YamlBoot):
         # 4 对输出修正属性: expression转fromExpression, 如 fromExpression: "steps['flip-coin'].outputs.result == 'heads' ? steps.heads.outputs.artifacts.headsresult : steps.tails.outputs.artifacts.tailsresult"
         elif type == 'outputs' and 'expression' in ret:
             ret['fromExpression'] = get_and_del_dict_item(ret, 'expression')
-
         # 修正表达式
         if 'fromExpression' in ret:
             ret['fromExpression'] = self.fix_expression(ret['fromExpression'])
@@ -674,9 +673,18 @@ class Boot(YamlBoot):
         :param expr:
         :return: 
         '''
-        # 1 解析出 {{ 与 }} 包含的内容
-        # 2 对 steps.flip-coin.outputs 或 tasks.flip-coin.outputs 中间一段 .flip-coin 替换为 ['flip-coin']
-        # re.sub(r'\{\{[^\}]\}\}')
+        # 1 对 steps.flip-coin.outputs 或 tasks.flip-coin.outputs 中间一段 .flip-coin 替换为 ['flip-coin']
+        def replace_expr(match) -> str:
+            expr = match.group()
+            step_name = match.group(2)
+            # 1.1 正常的变量命名: 原样返回
+            if re.match(r'\w[\w\d_]*$', step_name):
+                return expr
+            # 1.2 非正常变量命名, 如带-, 将 .flip-coin 替换为 ['flip-coin']
+            return expr.replace('.'+step_name, f"['{step_name}']")
+        expr = re.sub(r'(steps|tasks)\.([\w\d_-]+)\.outputs', replace_expr, expr)
+
+        # 2 干掉 {{ 与 }}
         return expr.replace('{{', '').replace('}}', '')
 
     # 构建模板的输入参数
