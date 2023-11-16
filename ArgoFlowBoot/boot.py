@@ -45,21 +45,11 @@ class Boot(YamlBoot):
             'labels': self.labels,
             'spec': self.spec,
             'args': self.args,
+            'cron': self.cron,
             'vc_templates': self.vc_templates,
             'templates': self.templates,
         }
         self.add_actions(actions)
-
-        # flow作用域的属性，跳出flow时就清空
-        self._flow = '' # 流程名
-        self._labels = {}  # 记录标签
-        self._spec = {}  # 记录流程其他配置
-        self._args = None  # 记录流程级传参
-        self._templates = {}  # 记录模板，key是模板名，value是模板定义
-        self._template_inputs = {} # 记录模板的输入参数名
-        self._template_outputs = {} # 记录模板的输出参数名
-        self._vc_templates = None # 记录vs模板
-        self._vc_mounts = [] # 记录vs挂载路径
 
         # 任务命名者
         self.namer = FuncIncrTaskNamer()
@@ -80,6 +70,21 @@ class Boot(YamlBoot):
         for version in py_versions:
             self.template_body_builders['python'+version] = self.wrap_build_python(version)
 
+        # flow作用域的属性，跳出flow时就清空
+        self._flow = '' # 流程名
+        self._labels = {}  # 记录标签
+        self._spec = {}  # 记录流程其他配置
+        self._args = None  # 记录流程级传参
+        self._cron_spec = None  # 记录cron选项
+        self._templates = {}  # 记录模板，key是模板名，value是模板定义
+        self._template_inputs = {} # 记录模板的输入参数名
+        self._template_outputs = {} # 记录模板的输出参数名
+        self._vc_templates = None # 记录vs模板
+        self._vc_mounts = [] # 记录vs挂载路径
+
+        # 跨flow的属性
+        self._flow2template_inputs = {}  # 记录所有流程的模板输入参数名
+
     # 清空app相关的属性
     def clear_app(self):
         self._flow = None  # 流程名
@@ -87,6 +92,7 @@ class Boot(YamlBoot):
         self._labels = {}  # 记录标签
         self._spec = {}  # 记录流程其他配置
         self._args = None  # 记录流程级传参
+        self._cron_spec = None  # 记录cron选项
         self._templates = {}  # 记录模板，key是模板名，value是模板定义
         self._template_inputs = {} # 记录模板的输入参数名
         self._template_outputs = {} # 记录模板的输出参数名
@@ -143,8 +149,13 @@ class Boot(YamlBoot):
         }
         # 执行子步骤
         self.run_steps(steps)
-        # 生成flow
-        self.build_flow(is_flow_template)
+        if self._cron_spec is None: # 生成flow
+            yaml = self.build_flow(is_flow_template)
+        else: # 生成cron flow
+            yaml = self.build_cron_flow()
+        self.save_yaml(yaml)
+        # 记录所有流程的模板输入参数名
+        self._flow2template_inputs[name] = self._template_inputs
         # 打印 kubectl apply 命令
         self.print_submit_cmd()
         # 清空app相关的属性
@@ -166,25 +177,31 @@ class Boot(YamlBoot):
         return dict(lbs, **self._labels)
 
     def build_flow(self, is_flow_template):
+        '''
+        构建 Workflow/WorkflowTemplate
+        :param is_flow_template: 是否WorkflowTemplate
+        :return:
+        '''
         # 入口为main
         entrypoint = "main"
         if entrypoint not in self._templates:
             raise Exception("未定义入口模板: main")
         # 退出处理
         exit_handler = None
-        if 'exit' in self._templates:
-            exit_handler = 'exit'
+        if 'onexit' in self._templates:
+            exit_handler = 'onexit'
+        # 资源类型+元数据根据是否WorkflowTemplate有不同
         if is_flow_template:
             kind = "WorkflowTemplate"
+            meta = {"name": self._flow} # flow template固定名字
         else:
             kind = "Workflow"
+            meta = { "generateName": self._flow + '-' } # flow自动生成名字
+        meta["labels"] = self.build_labels()
         yaml = {
             "apiVersion": "argoproj.io/v1alpha1",
             "kind": kind,
-            "metadata": {
-                "generateName": self._flow + '-',
-                "labels": self.build_labels()
-            },
+            "metadata": meta,
             "spec": {
                 "entrypoint": entrypoint,
                 "onExit": exit_handler,
@@ -201,7 +218,28 @@ class Boot(YamlBoot):
             }
         }
         del_dict_none_item(yaml["spec"])
-        self.save_yaml(yaml)
+        return yaml
+
+    def build_cron_flow(self):
+        '''
+        构建 CronWorkflow
+           cron选项调用 k8sboot 来生成
+           流程选项调用 build_flow() 来生成
+        :return:
+        '''
+        yaml = {
+            "apiVersion": "argoproj.io/v1alpha1",
+            "kind": "CronWorkflow",
+            "metadata": {
+                "name": self._flow,
+                "labels": self.build_labels()
+            },
+            "spec": {
+                **self._cron_spec,
+                "workflowSpec": self.build_flow(False)["spec"]
+            }
+        }
+        return yaml
 
     @replace_var_on_params
     def vc_templates(self, vcs):
@@ -269,6 +307,16 @@ class Boot(YamlBoot):
         :return:
         '''
         self._args = self.build_dict_args(args, 'flow-args')
+
+    # 定时
+    @replace_var_on_params
+    def cron(self, option):
+        if isinstance(option, str):
+            option = {
+                'schedule': option
+            }
+        # 调用k8sboot来构建cron选项
+        self._cron_spec = K8sBoot('.').build_cron(option)
 
     def templates(self, options):
         # 模板名:模板配置
@@ -390,7 +438,7 @@ class Boot(YamlBoot):
                 inputs = self.build_dict_args(ins, 'inputs') # 构建输入，会增加变量
         # 记录模板的输入参数名
         # self._template_inputs[name] = args # wrong: args太复杂了，可能用=带参数默认值，可能用dict => 从inputs中解析
-        self._template_inputs[name] = self.build_input_names(inputs)
+        self._template_inputs[name] = get_and_del_dict_item(inputs, 'name')
         if 'steps' not in option: # steps延迟替换变量, 因为下一步的输入变量会依赖上一步的输出
             option = replace_var(option, False) # 替换变量
         # 构建输出
@@ -412,14 +460,6 @@ class Boot(YamlBoot):
         pop_vars_stack(False) # 变量出栈
         del_dict_none_item(tpl)
         self._templates[name] = tpl
-
-    # 收集inputs中的参数名
-    def build_input_names(self, inputs):
-        if not inputs:
-            return []
-        params = inputs.get("parameters") or []
-        arts = inputs.get("artifacts") or []
-        return [e['name'] for e in params + arts]
 
     # 构建输入变量
     def build_input_vars(self, type, k, v=None):
@@ -470,7 +510,9 @@ class Boot(YamlBoot):
         # 拆分parameters与artifacts
         params = {}
         arts = {}
+        names = []
         for k, v in args.items():
+            names.append(k)
             if k.startswith('@'): # artifacts
                 v = self.fix_artifact_option(v, k)
                 arts[k] = v
@@ -479,12 +521,18 @@ class Boot(YamlBoot):
                 params[k] = v
             # 设输入变量
             self.build_input_vars(type, k, v)
+        # 检查入参的顺序
+        if type == 'inputs':
+            self.check_input_args_order(names, type)
         # 构建参数
         ret = {
             "parameters": self.build_params(params),
             "artifacts": self.build_artifacts(arts, type),
         }
         del_dict_none_item(ret)
+        # 返回参数名，方便后续记录模板入参
+        if type == 'inputs':
+            ret["name"] = names
         return ret
 
     def build_list_args(self, args: list, type: str):
@@ -519,14 +567,18 @@ class Boot(YamlBoot):
                 params[k] = v
             # 设输入变量
             self.build_input_vars(type, k, v)
-        # 检查参数的顺序
-        self.check_input_args_order(names, type)
+        # 检查入参的顺序
+        if type == 'inputs':
+            self.check_input_args_order(names, type)
         # 构建参数
         ret = {
             "parameters": self.build_params(params),
             "artifacts": self.build_artifacts(arts, type),
         }
         del_dict_none_item(ret)
+        # 返回参数名，方便后续记录模板入参
+        if type == 'inputs':
+            ret["name"] = names
         return ret
 
     def fix_artifact_option(self, v, k):
@@ -683,7 +735,7 @@ class Boot(YamlBoot):
             step = {
                 'template': step
             }
-        template = step['template']
+        template = get_and_del_dict_item(step, 'template')
         # 解析步骤名
         if isinstance(template, str) and '=' in template:  # 遇到有=，则 步骤名=模板调用
             # name, template = template.split('=') # 检查分割, 不能处理参数带=的情况
@@ -693,7 +745,7 @@ class Boot(YamlBoot):
                 name = mat.group(1)
                 template = re.sub(reg, '', template)
         if name is None:
-            name = step.get('name')
+            name = get_and_del_dict_item(step, 'name')
             # 根据模板表达式自动命名步骤，必须根据模板+参数，不能根据解析后的模板(只有函数名, 不带参数, 无法确定唯一名)
             if name is None:
                 if type == 'steps':
@@ -701,15 +753,53 @@ class Boot(YamlBoot):
                 else:
                     name = self.namer.get_name(template)  # tasks生成步骤名, 带缓存
         # 解析模板(函数调用)
-        template, args = parse_func(template, True)
+        flow_ref, template, args = self.parse_step_call(template)
         # 拼接步骤
         step["name"] = name
-        step["template"] = template
+        if flow_ref is None: # 本流程中的模板
+            step['template'] = template
+        else: # 引用其他 WorkflowTemplate 的模板
+            step['templateRef'] = {
+                'name': flow_ref,
+                'template': template,
+            }
         if args:
-            step['arguments'] = self.build_step_call_args(template, args)
+            step['arguments'] = self.build_step_call_args(template, args, flow_ref)
         # 输出变量
         self.build_step_output_vars(template, name, type)
         return step
+
+    def parse_step_call(self, template):
+        '''
+        解析模板(函数)调用
+           支持解析出对其他 WorkflowTemplate 的引用
+           TODO: 要拿到其他 WorkflowTemplate 的模板的入参，否则无法拼接调用参数
+        :param template:
+        :return:
+        '''
+        # 解析出对其他 WorkflowTemplate 的引用
+        flow_ref = None
+        reg = r'^([^\.\(]+)\.'
+        mat = re.search(reg, template)  # 正则分割
+        if mat is not None:
+            flow_ref = mat.group(1)
+            template = re.sub(reg, '', template)
+        # 解析模板调用(函数调用形式)
+        template, args = parse_func(template, True)
+        return flow_ref, template, args
+
+    # 构建steps调用的参数
+    def build_step_call_args(self, tpl_name, vals, flow_ref):
+        # 输入参数名
+        if flow_ref is None: # 当前流程
+            names = self._template_inputs[tpl_name]
+        else: # 其他流程
+            names = self._flow2template_inputs[flow_ref][tpl_name]
+        # if len(names) != len(vals):
+        #     raise Exception(f"调用模板{tpl_name}的参数个数与声明的参数个数不一致")
+
+        args = dict(zip(names, vals))
+        return self.build_dict_args(args, 'call')
 
     def build_step_output_vars(self, tpl_name, step_name, type):
         '''
@@ -736,16 +826,6 @@ class Boot(YamlBoot):
         if 'result' not in vals:
             vals['result'] = '{{' + type + '.' + step_name + '.outputs.result}}'
         set_var(step_name, vals)
-
-    # 构建steps调用的参数
-    def build_step_call_args(self, tpl_name, vals):
-        # 输入参数名
-        names = self._template_inputs[tpl_name]
-        # if len(names) != len(vals):
-        #     raise Exception(f"调用模板{tpl_name}的参数个数与声明的参数个数不一致")
-
-        args = dict(zip(names, vals))
-        return self.build_dict_args(args, 'call')
 
     def build_suspend(self, option):
         if not option:
