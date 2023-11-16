@@ -48,6 +48,7 @@ class Boot(YamlBoot):
             'cron': self.cron,
             'vc_templates': self.vc_templates,
             'templates': self.templates,
+            'include_argo': self.include_argo,
         }
         self.add_actions(actions)
 
@@ -977,6 +978,35 @@ class Boot(YamlBoot):
         if dep_nodes:
             task["dependencies"] = list(map(self.namer.get_name, dep_nodes))
         return task
+
+    # 加载argo流程模板文件，主要是为了获知其入参
+    def include_argo(self, argo_file):
+        flow = read_yaml(argo_file)
+        kind = flow['kind']
+        if kind == 'Workflow':
+            print("忽略")
+            return
+        # 流程名
+        flow_name = flow['name']
+        if kind == 'ClusterWorkflowTemplate':
+            flow_name = '~' + flow_name
+        # 遍历模板
+        tpls = flow['spec']['templates']
+        tpl2inputs = {}
+        for tpl in tpls:
+            inputs = tpl['inputs']
+            # 收集模板的入参名
+            names = []
+            params = inputs.get('parameters', [])
+            for param in params:
+                names.append(param['name'])
+            arts = inputs.get('artifacts', [])
+            for art in arts:
+                names.append('@' + art['name'])
+            # 记录模板入参名
+            tpl2inputs[tpl['name']] = names
+        # 记录流程的模板入参
+        self._flow2template_inputs[flow_name] = tpl2inputs
 
 # cli入口
 def main():
