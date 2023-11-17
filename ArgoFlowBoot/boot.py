@@ -40,9 +40,9 @@ class Boot(YamlBoot):
         self.stat_dump = False
         # 动作映射函数
         actions = {
-            'flow': self.flow,
-            'flow_template': self.flow_template,
-            'cluster_flow_template': self.cluster_flow_template,
+            'wf': self.wf,
+            'wft': self.wft,
+            'cwft': self.cwft,
             'labels': self.labels,
             'spec': self.spec,
             'args': self.args,
@@ -89,8 +89,7 @@ class Boot(YamlBoot):
         self._vc_mounts = [] # 记录vs挂载路径
 
         # 跨flow的属性
-        self._wft2args = {}  # 记录所有流程模板的输入参数名
-        self._wft2template_inputs = {}  # 记录所有流程模板的模板输入参数名
+        self._wft2template_inputs = {}  # 记录所有流程模板的模板输入参数名, 对key=''表示流程级输入参数名
 
     # 清空app相关的属性
     def clear_app(self):
@@ -156,13 +155,19 @@ class Boot(YamlBoot):
         return cmd_pref
 
     # --------- 动作处理的函数 --------
-    def flow_template(self, steps, name=None):
-        self.flow(steps, name, 'wft')
+    # 定义流程
+    def wf(self, steps, name=None):
+        self.do_flow(steps, name, 'wf')
 
-    def cluster_flow_template(self, steps, name=None):
-        self.flow(steps, name, 'cwft')
+    # 定义流程模板
+    def wft(self, steps, name=None):
+        self.do_flow(steps, name, 'wft')
 
-    def flow(self, steps, name=None, type='wf'):
+    # 定义集群级流程模板
+    def cwft(self, steps, name=None):
+        self.do_flow(steps, name, 'cwft')
+
+    def do_flow(self, steps, name, type):
         '''
         声明工作流，并执行子步骤
         :param steps 子步骤
@@ -185,8 +190,9 @@ class Boot(YamlBoot):
         else: # 生成flow
             yaml = self.build_flow()
         self.save_yaml(yaml)
-        # 记录所有流程的模板输入参数名
-        self._wft2template_inputs[name] = self._template_inputs
+        if self._type == 'wft' or self._type == 'cwft':
+            self._wft2template_inputs[name] = self._template_inputs # 记录所有流程模板的模板输入参数名
+            self._wft2template_inputs[name][''] = self.build_input_names(yaml['spec'].get('arguments'))  # 记录所有流程模板的输入参数名: key=''
         # 打印创建命令
         self.print_create_cmd()
         # 清空app相关的属性
@@ -209,15 +215,15 @@ class Boot(YamlBoot):
 
     def build_flow(self):
         '''
-        构建 Workflow/WorkflowTemplate/
+        构建 Workflow/WorkflowTemplate/ClusterWorkflowTemplate
         :return:
         '''
         # 入口为main
         entrypoint = None
-        if self._type == 'wf' or self._type == 'cwf': # 流程才有入口，流程模板没有
+        if "main" in self._templates:
             entrypoint = "main"
-            if entrypoint not in self._templates:
-                raise Exception("未定义入口模板: main")
+        elif self._type == 'wf' or self._type == 'cwf': # 流程必有入口，流程模板不必(如果通过流程模板创建流程就需要)
+            raise Exception("流程未定义入口模板: main")
         # 退出处理
         exit_handler = None
         if 'onexit' in self._templates:
@@ -475,7 +481,7 @@ class Boot(YamlBoot):
         # 记录模板的输入参数名
         # self._template_inputs[name] = args # wrong: args太复杂了，可能用=带参数默认值，可能用dict => 从inputs中解析
         self._template_inputs[name] = get_and_del_dict_item(inputs, 'name')
-        if 'steps' not in option and 'dag' not in option: # steps延迟替换变量, 因为下一步的输入变量会依赖上一步的输出
+        if 'steps' not in option and 'dag' not in option and 'create_wf_by_wft' not in option: # steps延迟替换变量, 因为下一步的输入变量会依赖上一步的输出, 同时会涉及到函数调用形式中参数值是变量的情况
             option = replace_var(option, False) # 替换变量
         # 构建主体
         body = self.build_template_body(option)
@@ -785,7 +791,7 @@ class Boot(YamlBoot):
         '''
         构建step
            兼容steps/dag的tasks中单个步骤的构建，兼容以下情况： 1 step参数类型不同 2 步骤自动命名不同 3 输出变量不同
-           steps延迟替换变量, 因为下一步的输入变量会依赖上一步的输出
+           steps延迟替换变量, 因为下一步的输入变量会依赖上一步的输出, 同时会涉及到函数调用形式中参数值是变量的情况
         :param step: 步骤信息, steps中会是list/str/dict, dag的tasks是str
         :param name: 指定步骤名
         :param type: 类型： 1 steps 2 tasks(dag)
@@ -795,8 +801,6 @@ class Boot(YamlBoot):
         if isinstance(step, list):
             return list(map(self.build_step, step))
 
-        # steps延迟替换变量, 因为下一步的输入变量会依赖上一步的输出
-        step = replace_var(step)
         # 构建dict: template+when
         if isinstance(step, str):
             step = {
@@ -821,6 +825,8 @@ class Boot(YamlBoot):
                     name = self.namer.get_name(template)  # tasks生成步骤名, 带缓存
         # 解析模板(函数调用)
         wft_ref, template, args = self.parse_step_call(template)
+        # steps延迟替换变量, 只针对调用参数, 因为下一步的输入变量会依赖上一步的输出, 同时会涉及到函数调用形式中参数值是变量的情况
+        args = replace_var(args, False)
         # 拼接步骤
         step["name"] = name
         if wft_ref is None: # 本流程中的模板
@@ -840,19 +846,15 @@ class Boot(YamlBoot):
         '''
         解析模板(函数)调用
            支持解析出对其他 WorkflowTemplate 的引用
-           TODO: 要拿到其他 WorkflowTemplate 的模板的入参，否则无法拼接调用参数
         :param template:
         :return:
         '''
-        # 解析出对其他 WorkflowTemplate 的引用
-        wft_ref = None
-        reg = r'^([^\.\(]+)\.'
-        mat = re.search(reg, template)  # 正则分割
-        if mat is not None:
-            wft_ref = mat.group(1)
-            template = re.sub(reg, '', template)
         # 解析模板调用(函数调用形式)
         template, args = parse_func(template, True)
+        # 解析出对其他 WorkflowTemplate 的引用: 在steps中调`流程引用.模板(参数)`
+        wft_ref = None
+        if '.' in template:
+            wft_ref, template = template.split('.', 1)
         return wft_ref, template, args
 
     # 构建steps调用的参数
@@ -991,6 +993,8 @@ class Boot(YamlBoot):
         # 只取第一个
         name = get_dict_first_key(option)
         wft, args = parse_func(option[name], True)
+        # 延迟替换变量, 只针对调用参数, 因为下一步的输入变量会依赖上一步的输出, 同时会涉及到函数调用形式中参数值是变量的情况
+        args = replace_var(args, False)
         names = self.get_wft_arg_names(wft)
         args = dict(zip(names, args))
         flow = {
@@ -1001,7 +1005,9 @@ class Boot(YamlBoot):
             },
             "spec": {
                 "arguments": self.build_dict_args(args, 'call'),
-                "workflowTemplateRef": list(self._templates.values()),
+                "workflowTemplateRef": {
+                    "name": wft
+                }
             }
         }
         return {
@@ -1101,9 +1107,7 @@ class Boot(YamlBoot):
         :param wft_ref: 流程模板名，如果是cluster则有~前缀
         :return:
         '''
-        if wft_ref not in self._wft2template_inputs:
-            self.pull_argo_wft(wft_ref)
-        self._wft2args[wft_ref]
+        return self.get_wft_template_input_names(wft_ref, '') # 对key=''表示流程级输入参数名
 
     def get_wft_template_input_names(self, wft_ref, tpl_name):
         '''
@@ -1114,7 +1118,7 @@ class Boot(YamlBoot):
         '''
         if wft_ref not in self._wft2template_inputs:
             self.pull_argo_wft(wft_ref)
-        self._wft2template_inputs[wft_ref][tpl_name]
+        return self._wft2template_inputs[wft_ref][tpl_name]
 
     # 加载argo流程模板原生文件，主要是为了获知其入参 -- 主动引入
     def include_argo_wft(self, argo_file):
@@ -1123,7 +1127,11 @@ class Boot(YamlBoot):
 
     # 拉取argo流程模板的yaml文件 -- 被动拉取
     def pull_argo_wft(self, name, ns='argo'):
-        txt = run_command(f"kubectl get wftmpl {name} -n {ns} -o yaml")
+        if name.startswith('~'):
+            res = 'cwft'
+        else:
+            res = 'wftmpl'
+        txt = run_command(f"kubectl get {res} {name} -n {ns} -o yaml")
         flow = yaml.load(txt, Loader=yaml.FullLoader)
         self.analyse_input_names(flow)
 
@@ -1147,7 +1155,7 @@ class Boot(YamlBoot):
         self._wft2template_inputs[flow_name] = tpl2inputs
 
         # 2 记录流程入参
-        self._wft2args[flow_name] = self.build_input_names(flow.get('arguments'))
+        self._wft2template_inputs[flow_name][''] = self.build_input_names(flow.get('arguments'))
 
     def build_input_names(self, inputs):
         '''

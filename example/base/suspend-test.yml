@@ -1,5 +1,5 @@
 # https://argoproj.github.io/argo-workflows/walk-through/suspending/
-- flow(suspend-test):
+- wf(suspend-test):
     - templates:
         approve():
             suspend:

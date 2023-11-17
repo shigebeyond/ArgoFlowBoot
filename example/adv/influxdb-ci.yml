@@ -1,5 +1,5 @@
 # argo-workflows/examples/ci.yaml
-- flow(ci):
+- wf(ci):
     - args:
         revision: cfe12d6
         '@code': # 共享文件(工件)

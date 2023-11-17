@@ -70,11 +70,8 @@ class FuncIncrTaskNamer(TaskNamer):
 
     def build_name(self, task: Union[str, list]):
         # 拆分出函数名
-        #func, _ = parse_func(task, True) # 函数名可能带.，表示引用流程模板中的模板
-        func = task
-        if '(' in task:
-            func = task.split('(', 1)[0]
-        func = func.replace('.', '-')
+        func, _ = parse_func(task, True)
+        func = func.replace('.', '-').replace('$', '')
         # 第一次，原样返回函数名
         if func not in self.counters:
             self.counters[func] = 1

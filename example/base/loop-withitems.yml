@@ -1,5 +1,5 @@
 # https://argoproj.github.io/argo-workflows/walk-through/loops/
-- flow(loop-withitems):
+- wf(loop-withitems):
     - templates:
         whalesay(msg):
             container:
@@ -15,7 +15,7 @@
                   - goodbye world # item 2
 
 # withitems + map
-- flow(loop-withitems-map):
+- wf(loop-withitems-map):
     - templates:
         cat-os-release(image,tag):
             container:

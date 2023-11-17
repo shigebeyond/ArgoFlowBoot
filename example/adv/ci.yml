@@ -1,5 +1,5 @@
 # argo-workflows/examples/ci.yaml
-- flow(ci):
+- wf(ci):
     - args:
         #revision: cfe12d6
         revision: master
@@ -38,7 +38,7 @@
                     - { image: 'debian', tag: '9.1' }
                     - { image: 'alpine', tag: '3.6' }
 
-- flow(ci2):
+- wf(ci2):
     - set_vars:
         vcode:
           path: /code/ArgoFlowBoot

@@ -1,5 +1,5 @@
 # https://argoproj.github.io/argo-workflows/walk-through/timeouts/
-- flow(timeouts-test):
+- wf(timeouts-test):
     - spec:
         activeDeadlineSeconds: 5 # terminate workflow after 5 seconds
     - templates:

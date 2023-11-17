@@ -1,5 +1,5 @@
 # https://argoproj.github.io/argo-workflows/walk-through/artifacts/
-- flow(artifact-test):
+- wf(artifact-test):
     - templates:
         whalesay(): # 生成工件
             container:
@@ -21,7 +21,7 @@
                 expression: "steps['print-message'].outputs.result"
 
 # 更简洁
-- flow(artifact-test2):
+- wf(artifact-test2):
     - templates:
         whalesay(): # 生成工件
             container:

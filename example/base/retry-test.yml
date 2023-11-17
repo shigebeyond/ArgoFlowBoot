@@ -1,5 +1,5 @@
 # https://argoproj.github.io/argo-workflows/walk-through/retrying-failed-or-errored-steps/
-- flow(retry-test):
+- wf(retry-test):
     - templates:
         main(): # 工作流入口必然是main
             python3.6:

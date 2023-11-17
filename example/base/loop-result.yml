@@ -1,5 +1,5 @@
 # https://argoproj.github.io/argo-workflows/walk-through/loops/
-- flow(loop-result):
+- wf(loop-result):
     - templates:
         print-json-entry(index): # 单词迭代的处理
             script: # The output must be a valid JSON

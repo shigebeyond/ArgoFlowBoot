@@ -1,5 +1,5 @@
 # https://argoproj.github.io/argo-workflows/walk-through/output-parameters/
-- flow(output-test):
+- wf(output-test):
     - args: # 流程级参数
         msg: hello world
     - templates:

@@ -1,5 +1,5 @@
 # https://argoproj.github.io/argo-workflows/walk-through/dag/
-- flow(dag-test):
+- wf(dag-test):
     - templates:
         echo(msg): #
             container:

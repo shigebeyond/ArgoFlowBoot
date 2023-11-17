@@ -1,6 +1,6 @@
 # https://argoproj.github.io/argo-workflows/key-only-artifacts/
 # 必须先配置通用的引用仓库，参考 https://argoproj.github.io/argo-workflows/artifact-repository-ref/
-- flow(artifact-key):
+- wf(artifact-key):
     - set_vars:
         file:
           path: /mnt/file

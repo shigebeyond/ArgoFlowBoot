@@ -1,5 +1,5 @@
 # https://argoproj.github.io/argo-workflows/walk-through/exit-handlers/
-- flow(exit-test):
+- wf(exit-test):
     - templates:
         send-email():
             container:

@@ -1,5 +1,5 @@
 # argo-workflows/examples/conditional-parameters.yaml
-- flow(conditionals-parameters):
+- wf(conditionals-parameters):
     - templates:
         flip-coin(): # python随机返回 heads 或 tails -- Return heads or tails based on a random number
             python3.6:

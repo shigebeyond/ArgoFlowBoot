@@ -1,5 +1,5 @@
 # https://argoproj.github.io/argo-workflows/variables/
-- flow(var-test):
+- wf(var-test):
     - args:
         msg: hello
         luck-code: 9

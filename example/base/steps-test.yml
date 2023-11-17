@@ -1,5 +1,5 @@
 # https://argoproj.github.io/argo-workflows/walk-through/steps/
-- flow(steps-test):
+- wf(steps-test):
     - templates:
         whalesay(msg): #
             container:

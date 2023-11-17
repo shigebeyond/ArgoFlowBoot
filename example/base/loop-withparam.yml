@@ -1,6 +1,6 @@
 # https://argoproj.github.io/argo-workflows/walk-through/loops/
 # 接收json
-- flow(loop-withparam):
+- wf(loop-withparam):
     - args:
         os-list: | # json
                 [
@@ -19,7 +19,7 @@
             - - template: cat-os-release({{item.image}},{{item.tag}})
                 withParam: $os-list # parameter specifies the list to iterate over
 
-- flow(loop-withparam2):
+- wf(loop-withparam2):
     - templates:
         gen-number-list(): # 生成随机秒数json Generate a list of numbers in JSON format
             python3.6:

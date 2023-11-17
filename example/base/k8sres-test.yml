@@ -1,5 +1,5 @@
 # https://argoproj.github.io/argo-workflows/walk-through/kubernetes-resources/
-- flow(k8sres-test):
+- wf(k8sres-test):
     - templates:
         main(): # 工作流入口必然是main
             apply:

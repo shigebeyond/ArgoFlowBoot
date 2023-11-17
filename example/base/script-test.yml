@@ -1,5 +1,5 @@
 # https://argoproj.github.io/argo-workflows/walk-through/scripts-and-results/
-- flow(script-test):
+- wf(script-test):
     - templates:
         bash-random(): # bash生成随机数
             script:

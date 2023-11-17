@@ -1,5 +1,5 @@
 # docs/async-pattern.md
-- flow(external-job):
+- wf(external-job):
   - args:
       cmd: sleep 1000
   - templates:

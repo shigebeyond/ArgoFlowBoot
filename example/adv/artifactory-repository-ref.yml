@@ -1,5 +1,5 @@
 # argo-workflows/examples/artifactory-repository-ref.yaml
-- flow(artifactory-repository-ref):
+- wf(artifactory-repository-ref):
     - spec:
         artifactRepositoryRef:
           key: my-key

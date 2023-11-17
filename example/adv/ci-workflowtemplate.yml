@@ -9,7 +9,7 @@
         key: "ci-workflowtemplate/{{workflow.parameters.branch}}/GOCACHE"
 
 # argo-workflows/examples/ci-workflowtemplate.yaml
-- flow_template(ci-workflowtemplate):
+- wft(ci-workflowtemplate):
     - args:
         branch: master
     - vc_templates: # 共享的pvc, 所有任务的容器都会挂载
