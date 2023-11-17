@@ -1,0 +1,11 @@
+# https://argoproj.github.io/argo-workflows/variables/
+- flow(var-test):
+    - args:
+        msg: hello
+        luck-code: 9
+    - templates:
+        main(): # 工作流入口必然是main，要放最后
+            container:
+              command: echo "$msg {{workflow.mainEntrypoint}}, today's luck code is $luck-code" # 输出 hello main, today's luck code is 9
+
+

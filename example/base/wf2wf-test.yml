@@ -1,0 +1,11 @@
+# https://argoproj.github.io/argo-workflows/workflow-templates/
+- flow_template(hello-world-wft):
+    - templates:
+        whalesay(msg):
+            container:
+              command: cowsay $msg
+- flow(hello-world-wf):
+    - templates:
+        main():
+            steps:
+                - - hello-world-wft.whalesay(hello)

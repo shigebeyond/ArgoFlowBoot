@@ -1,0 +1,16 @@
+# https://argoproj.github.io/argo-workflows/http-template/
+- flow(http-test):
+    - templates:
+        req():
+            http: GET https://list.zhonghuasuan.com/search type=goods&key=hello
+        main(): # 工作流入口必然是main
+            steps:
+                - - req()
+- flow(http-test2):
+    - templates:
+        req(url,data):
+            http: GET $url $data
+        main(): # 工作流入口必然是main
+            steps:
+                - - req(https://list.zhonghuasuan.com/search, type=goods&key=hello)
+

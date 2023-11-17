@@ -1,0 +1,17 @@
+# https://argoproj.github.io/argo-workflows/workflow-of-workflows/
+# 流程创建流程
+- flow_template(hello-world-wft):
+    - templates:
+        whalesay(msg):
+            container:
+              command: cowsay $msg
+- flow(wf2wf-test):
+    - templates:
+        resource-without-argument():
+            create_wf_by_wft: hello-world-wft(shige)
+        resource-with-argument(msg):
+            create_wf_by_wft: hello-world-wft($msg)
+        main():
+            steps:
+                - - resource-without-argument()
+                - - resource-with-argument(beyond)
