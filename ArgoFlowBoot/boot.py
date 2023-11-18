@@ -40,6 +40,7 @@ class Boot(YamlBoot):
         self.stat_dump = False
         # 动作映射函数
         actions = {
+            'ns': self.ns,
             'wf': self.wf,
             'wft': self.wft,
             'cwft': self.cwft,
@@ -50,6 +51,7 @@ class Boot(YamlBoot):
             'vc_templates': self.vc_templates,
             'templates': self.templates,
             'include_argo_wft': self.include_argo_wft,
+            'bind_event': self.bind_event,
         }
         self.add_actions(actions)
 
@@ -74,6 +76,8 @@ class Boot(YamlBoot):
         py_versions = '3.6/3.7/3.8/3.9/3.10/3.11'.split('/')
         for version in py_versions:
             self.template_body_builders['python'+version] = self.wrap_build_python(version)
+
+        self._ns = '' # 命名空间
 
         # flow作用域的属性，跳出flow时就清空
         self._type = '' # 类型: wf流程, cwf定时流程, wft流程模板, cwft集群级流程模板
@@ -108,15 +112,15 @@ class Boot(YamlBoot):
         clear_vars('*') # 清理全部变量
         self.namer = FuncIncrTaskNamer() # 重置命名器，因为他内部有状态(计数)
 
-    def save_yaml(self, data):
+    def save_yaml(self, data, file):
         '''
-        保存yaml
+        保存为yaml文件
         :param data 资源数据
+        :param file 输出文件
         '''
-        # 检查流程名
-        if self._flow is None:
-            raise Exception(f"生成工作流文件失败: 没有指定流程")
-        file = f"{self._flow}.yml"
+        # 检查文件
+        if not file:
+            raise Exception(f"未指定输出文件")
         # 转yaml
         if isinstance(data, list): # 多个资源
             data = list(map(yaml.dump, data))
@@ -133,7 +137,6 @@ class Boot(YamlBoot):
     def print_create_cmd(self):
         '''
         打印argo创建命令
-        :param type 是否流程模板
         '''
         cmd = f'流程[{self._flow}]的定义文件已生成完毕, 如要提交到到集群中请手动执行: {self.get_create_cmd_pref(self._type)} {self.output_dir}/{self._flow}.yml'
         log.info(cmd)
@@ -155,6 +158,13 @@ class Boot(YamlBoot):
         return cmd_pref
 
     # --------- 动作处理的函数 --------
+    # 设置命名空间
+    @replace_var_on_params
+    def ns(self, name):
+        if self._ns != '':
+            raise Exception('已设置过命名空间, 仅支持唯一的命名空间')
+        self._ns = name
+
     # 定义流程
     def wf(self, steps, name=None):
         self.do_flow(steps, name, 'wf')
@@ -189,7 +199,10 @@ class Boot(YamlBoot):
             yaml = self.build_cron_flow()
         else: # 生成flow
             yaml = self.build_flow()
-        self.save_yaml(yaml)
+        # 保存为yaml文件
+        file = f"{self._flow}.yml"
+        self.save_yaml(yaml, file)
+        # 记录全局的入参
         if self._type == 'wft' or self._type == 'cwft':
             self._wft2template_inputs[name] = self._template_inputs # 记录所有流程模板的模板输入参数名
             self._wft2template_inputs[name][''] = self.build_input_names(yaml['spec'].get('arguments'))  # 记录所有流程模板的输入参数名: key=''
@@ -239,6 +252,8 @@ class Boot(YamlBoot):
             kind = "Workflow"
             meta = { "generateName": self._flow + '-' } # flow自动生成名字
         meta["labels"] = self.build_labels()
+        if self._ns:
+            meta['namespace'] = self._ns
         yaml = {
             "apiVersion": "argoproj.io/v1alpha1",
             "kind": kind,
@@ -280,6 +295,8 @@ class Boot(YamlBoot):
                 "workflowSpec": self.build_flow(False)["spec"]
             }
         }
+        if self._ns:
+            yaml['metadata']['namespace'] = self._ns
         return yaml
 
     @replace_var_on_params
@@ -1010,6 +1027,8 @@ class Boot(YamlBoot):
                 }
             }
         }
+        if self._ns:
+            flow['metadata']['namespace'] = self._ns
         return {
             "resource": {
                 "action": "create",
@@ -1128,10 +1147,13 @@ class Boot(YamlBoot):
     # 拉取argo流程模板的yaml文件 -- 被动拉取
     def pull_argo_wft(self, name, ns='argo'):
         if name.startswith('~'):
-            res = 'cwft'
+            res = 'cluster-template'
         else:
-            res = 'wftmpl'
-        txt = run_command(f"kubectl get {res} {name} -n {ns} -o yaml")
+            res = 'template'
+        cmd = f"argo {res} get {name} -n {ns} -o yaml"
+        txt = run_command(cmd)
+        if not txt:
+            raise Exception(f"无法通过命令获得流程模板定义: {cmd}")
         flow = yaml.load(txt, Loader=yaml.FullLoader)
         self.analyse_input_names(flow)
 
@@ -1173,6 +1195,95 @@ class Boot(YamlBoot):
         for a in arts:
             ret.append('@' + a['name'])
         return ret
+
+    # ------------------------ 流程绑定事件 ------------------------
+    def bind_event(self, option, name=None):
+        '''
+        流程绑定事件
+        :param option: dict{discriminator, selector, wft}
+                       discriminator与selector二选一
+                       discriminator事件鉴别器，用于区分事件类型，可省，默认为绑定名name
+                       事件选择器，与discriminator只能存在一个
+        :param name: 绑定名
+        :return:
+        '''
+
+        # 1 通过 discriminator 或 selector 选项来构建selector配置
+        if 'selector' in option:
+            selector = option['selector']
+            discriminator = ''
+            mat = re.search(r"discriminator\s*==\s*([^\s&|]+)", selector)
+            if mat:
+                discriminator = mat.group(1)
+        else:
+            if 'discriminator' in option:
+                discriminator = option['discriminator']
+            else: # 如果连discriminator都没指定，则使用绑定事件名作为 discriminator
+                discriminator = name
+            selector = f'discriminator == "{discriminator}"'
+
+        # 2 调用流程模板
+        wft, args = parse_func(option['wft'], True)
+        # 延迟替换变量, 只针对调用参数, 因为下一步的输入变量会依赖上一步的输出, 同时会涉及到函数调用形式中参数值是变量的情况
+        args = replace_var(args, False)
+        args = list(map(self.fix_event_call_arg, args)) # 修正事件触发调用流程的参数
+        mevent = self.mock_event(args) # 虚拟一个事件
+        names = self.get_wft_arg_names(wft)
+        args = dict(zip(names, args))
+        bind = {
+            "apiVersion": "argoproj.io/v1alpha1",
+            "kind": "WorkflowEventBinding",
+            "metadata": {
+                "name": name
+            },
+            "spec": {
+                "event": {
+                    "selector": selector
+                },
+                "submit": {
+                    "workflowTemplateRef": {
+                        "name": wft
+                    },
+                    "arguments": self.build_dict_args(args, 'call'),
+                }
+            }
+        }
+        if self._ns:
+            bind['metadata']['namespace'] = self._ns
+        # 保存为yaml文件
+        file = f"{name}.yml"
+        self.save_yaml(bind, file)
+        apply_cmd = f'流程绑定事件[{name}]的定义文件已生成完毕, 如要提交到到集群中请手动执行: kubectl apply -f {self.output_dir}/{name}.yml'
+        log.info(apply_cmd)
+        send_event_cmd  = '发送事件命令如:\nARGO_TOKEN="Bearer $(kubectl get secret default.service-account-token -n argo -o=jsonpath=\'{.data.token}\' | base64 --decode)"\n' + \
+                    'curl https://localhost:2746/api/v1/events/argo/' + discriminator + ' -H "Authorization: $ARGO_TOKEN" -d \'' + json.dumps(mevent) + '\' -k'
+        log.info(send_event_cmd)
+
+    # 修正事件触发调用流程的参数
+    def fix_event_call_arg(self, arg):
+        if isinstance(arg, dict) and 'event' in arg:
+            return arg
+        return {
+            'event': arg
+        }
+
+    # 根据参数来虚拟一个事件
+    def mock_event(self, args):
+        ret = {}
+        for arg in args:
+            parts = arg['event'].split('.')
+            if parts.pop(0) == 'payload':
+                item = ret
+                n = len(parts)
+                for i in range(0, n):
+                    p = parts[i]
+                    if i == n-1:
+                        default = '?'
+                    else:
+                        default = {}
+                    item = get_or_put_dict_item(item, p, default)
+        return ret or ''
+
 
 # cli入口
 def main():
