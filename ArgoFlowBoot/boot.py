@@ -993,6 +993,7 @@ class Boot(YamlBoot):
 
         :param option: dict类型: key是流程名前缀, value是流程模板(调用格式,带参数)
                        str类型: 提取流程模板名作为流程名前缀
+                       流程模板名如果是~开头，则为ClusterWorkflowTemplate，否则为WorkflowTemplate
         :return:
         '''
         # 如果是str，则提取流程模板名作为流程名前缀
@@ -1012,8 +1013,14 @@ class Boot(YamlBoot):
         wft, args = parse_func(option[name], True)
         # 延迟替换变量, 只针对调用参数, 因为下一步的输入变量会依赖上一步的输出, 同时会涉及到函数调用形式中参数值是变量的情况
         args = replace_var(args, False)
+        # 构建参数
         names = self.get_wft_arg_names(wft)
         args = dict(zip(names, args))
+        # 识别是否cluster
+        if name.startswith('~'):
+            clusterOption = { 'clusterScope': True }
+        else:
+            clusterOption = {}
         flow = {
             "apiVersion": "argoproj.io/v1alpha1",
             "kind": "Workflow",
@@ -1021,10 +1028,11 @@ class Boot(YamlBoot):
                 "generateName": name + '-'
             },
             "spec": {
-                "arguments": self.build_dict_args(args, 'call'),
                 "workflowTemplateRef": {
-                    "name": wft
-                }
+                    "name": wft,
+                    **clusterOption
+                },
+                "arguments": self.build_dict_args(args, 'call')
             }
         }
         if self._ns:
@@ -1123,7 +1131,7 @@ class Boot(YamlBoot):
     def get_wft_arg_names(self, wft_ref):
         '''
         获得其他流程模板的入参
-        :param wft_ref: 流程模板名，如果是cluster则有~前缀
+        :param wft_ref: 流程模板名，如果是~开头，则为ClusterWorkflowTemplate，否则为WorkflowTemplate
         :return:
         '''
         return self.get_wft_template_input_names(wft_ref, '') # 对key=''表示流程级输入参数名
@@ -1131,7 +1139,7 @@ class Boot(YamlBoot):
     def get_wft_template_input_names(self, wft_ref, tpl_name):
         '''
         获得其他流程模板的模板入参
-        :param wft_ref: 流程模板名，如果是cluster则有~前缀
+        :param wft_ref: 流程模板名，如果是~开头，则为ClusterWorkflowTemplate，否则为WorkflowTemplate
         :param tpl_name: 流程内模板名
         :return:
         '''
@@ -1144,10 +1152,16 @@ class Boot(YamlBoot):
         flow = read_yaml(argo_file)
         self.analyse_input_names(flow)
 
-    # 拉取argo流程模板的yaml文件 -- 被动拉取
     def pull_argo_wft(self, name, ns='argo'):
+        '''
+        拉取argo流程模板的yaml文件 -- 被动拉取
+        :param name: 流程模板名, 如果是~开头，则为ClusterWorkflowTemplate，否则为WorkflowTemplate
+        :param ns:
+        :return:
+        '''
         if name.startswith('~'):
             res = 'cluster-template'
+            name = name[1:]
         else:
             res = 'template'
         cmd = f"argo {res} get {name} -n {ns} -o yaml"
