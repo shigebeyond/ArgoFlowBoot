@@ -5,6 +5,7 @@ import json
 import os
 import re
 from K8sBoot.boot import Boot as K8sBoot
+from pyutilb.curl import parse_curl
 from pyutilb.util import *
 from pyutilb.file import *
 from pyutilb.cmd import *
@@ -44,12 +45,14 @@ class Boot(YamlBoot):
             'wf': self.wf,
             'wft': self.wft,
             'cwft': self.cwft,
+            'cwf': self.cwf,
             'labels': self.labels,
             'spec': self.spec,
             'args': self.args,
             'cron': self.cron,
             'vc_templates': self.vc_templates,
             'templates': self.templates,
+            'include_templates': self.include_templates,
             'include_argo_wft': self.include_argo_wft,
             'bind_event': self.bind_event,
         }
@@ -176,6 +179,10 @@ class Boot(YamlBoot):
     # 定义集群级流程模板
     def cwft(self, steps, name=None):
         self.do_flow(steps, name, 'cwft')
+
+    # 定义定时流程
+    def cwf(self, steps, name=None):
+        self.do_flow(steps, name, 'cwf')
 
     def do_flow(self, steps, name, type):
         '''
@@ -369,7 +376,6 @@ class Boot(YamlBoot):
     # 定时
     @replace_var_on_params
     def cron(self, option):
-        self._type = 'cwf'
         if isinstance(option, str):
             option = {
                 'schedule': option
@@ -382,6 +388,12 @@ class Boot(YamlBoot):
         for name, option in options.items():
             self.build_template(name, option)
 
+    # 流程内模板配置放一个yaml文件中，引入他的内容并调用 templates() 动作
+    def include_templates(self, file):
+        with open(file, 'r') as file:
+            data = yaml.load(file, Loader=yaml.SafeLoader)
+            self.templates(data)
+
     def build_template_body(self, option):
         ret = {}
         # 逐个匹配模板类型，并调用对应的模板主体构建器
@@ -392,8 +404,12 @@ class Boot(YamlBoot):
 
         return ret
 
-    # 获得默认镜像
     def get_default_image(self, option):
+        '''
+        获得默认镜像
+        :param option:
+        :return:
+        '''
         cmd = option.get('command')
         if 'source' in option and cmd is None:
             return 'bash'
@@ -404,17 +420,17 @@ class Boot(YamlBoot):
         if isinstance(cmd, list):
             cmd = cmd[0]
         cmd = cmd.strip()
-        if cmd == 'bash':
+        if cmd.startswith('bash'):
             return 'bash'
 
         if cmd.startswith('python'):
             version = re.search(r'^python([\d\.]+)?', cmd).group(1) or '3.6' # 从命令中获得python版本，缺省为3.6
             return f"python:alpine{version}"
 
-        if 'cowsay ' in cmd or 'cowsay ' == cmd :
+        if cmd.startswith('cowsay'):
             return 'docker/whalesay'
 
-        if 'curl ' in cmd or 'curl ' == cmd :
+        if cmd.startswith('curl'):
             return 'appropriate/curl'
 
         return 'alpine'
@@ -934,22 +950,29 @@ class Boot(YamlBoot):
         '''
         构建http请求
         :param option: dict类型： https://argoproj.github.io/argo-workflows/http-template/
-                       str类型： `方法 url 请求数据` 用空格分开
+                       str类型： curl命令
         :return:
         '''
         if isinstance(option, str):
-            parts = re.split('\s', option.strip(), maxsplit=2)
-            if len(parts) == 2:
-                method, url = parts
-                data = None
-            elif len(parts) == 3:
-                method, url, data = parts
-            else:
-                raise Exception("无效http请求选项")
+            # 解析curl
+            curl = re.sub(r'^curl +', '', option)
+            req = parse_curl(curl, True)
+            # 拼接请求头
+            headers = []
+            if req.header:
+                headers = [{'name': k, 'value': v} for k, v in req.header.items()]
+            # 补全请求方法
+            method = req.request
+            if method is None:
+                if req.data:
+                    method = 'POST'
+                else:
+                    method = 'GET'
             option = {
-                "url": url,
-                "method": method.upper(),
-                "body": data,
+                "url": req.url,
+                "method": method,
+                "body": req.data,
+                "headers": headers,
             }
         # 默认超时
         if "timeoutSeconds" not in option:
