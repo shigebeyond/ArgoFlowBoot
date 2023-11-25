@@ -1,13 +1,13 @@
 # artifact入参带默认值： 通过变量的方式
 - wf(artifact-var):
-    - set_vars:
+    - set_vars: # 定义变量
         source-opt:
             path: /src # 可省，默认路径为 /tmp/artifacts/工件名
             git:
                 repo: https://gitee.com/argoproj/argo-workflows.git
                 revision: "master"
-    - templates:
-        main(@source=$source-opt): # 工作流入口必然是main
+    - templates: # 定义模板
+        main(@source=$source-opt): # 变量用作采纳数默认值
             container:
                 command: ls -l ${@source.path}
 

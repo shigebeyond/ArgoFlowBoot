@@ -2,7 +2,13 @@
 - wf(http-test):
     - templates:
         req():
-            http: GET https://list.zhonghuasuan.com/search type=goods&key=hello
+            # 简写: curl命令
+            http: curl https://list.zhonghuasuan.com/search -d type=goods&key=hello
+            # 完整写法
+#            http:
+#                url: https://list.zhonghuasuan.com/search
+#                method: POST
+#                body: type=goods&key=hello
         main(): # 工作流入口必然是main
             steps:
                 - - req()

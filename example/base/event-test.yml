@@ -1,6 +1,7 @@
-# https://argoproj.github.io/argo-workflows/workflow-of-workflows/
+# https://argoproj.github.io/argo-workflows/events/
 # 流程创建流程
 - ns: argo
+# 1 流程模板
 - wft(my-wft):
     - args:
         msg: shige
@@ -8,8 +9,13 @@
         main(msg):
             container:
               command: cowsay $msg
-- bind_event(test-event): # 流程绑定事件(绑定名)
+# 2 流程绑定事件(绑定名) -- 触发流程模板
+- bind_event(test-event):
     # discriminator与selector二选一
     # discriminator: test-event # 事件鉴别器，用于区分事件类型，可省，默认为绑定名
     # selector: discriminator == "test-event" # 事件选择器，与discriminator只能存在一个
     wft: my-wft(payload.message) # 事件触发的流程模板
+# 3 发起事件
+#  curl https://10.111.205.189:2746/api/v1/events/argo/test-event \
+#  -H "Authorization: $ARGO_TOKEN" \
+#  -d '{"message": "hello"}' -k

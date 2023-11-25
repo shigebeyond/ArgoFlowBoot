@@ -1,18 +1,18 @@
 # https://argoproj.github.io/argo-workflows/workflow-of-workflows/
 # 流程创建流程
-- wft(hello-world-wft):
+- wft(hello-world-wft): # 流程模板
     - args:
         msg: shige
     - templates:
         main(msg):
             container:
               command: cowsay $msg
-- wf(wf2wf-test):
+- wf(wf2wf-test): # 流程: 演示通过流程模板来创建2个子流程
     - templates:
         resource-without-argument():
-            create_wf_by_wft: hello-world-wft()
+            create_wf_by_wft: hello-world-wft() # 通过流程模板来创建子流程 -- 不带参数
         resource-with-argument(msg):
-            create_wf_by_wft: hello-world-wft($msg)
+            create_wf_by_wft: hello-world-wft($msg) # 通过流程模板来创建子流程 -- 带参数
         main():
             steps:
                 - - resource-without-argument()
