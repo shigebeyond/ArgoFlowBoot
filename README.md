@@ -373,6 +373,12 @@ whalesay2(msg=hello,@art=/tmp/message): # 定义模板 whalesay，带2个输入�
                 command: ls -l ${@source.path}
 ```
 
+3. 用变量的方式来引用入参 
+对模板 `whalesay(msg,@art):`, 你可以使用以下方式来引用入参:
+变量`$msg` = `{{inputs.parameters.msg}}`
+变量`$@art` = `{{inputs.artifacts.art}}`
+变量表达式`${@art.path}` = artifacts变量`art`挂载的路径
+
 ### 9.3 模板的输出参数
 1. 模板的输出参数是定义在`out`属性中
 ```yaml
@@ -432,6 +438,26 @@ main(): # 定义模板 main
     - - whalesay(hello2)
       - whalesay(hello3)
 ```
+
+步骤之间传递参数， 即引用上一步骤的输出参数，可以用变量的方式来引用：
+```
+whalesay(): # 定义模板 whalesay，有输出参数
+    container:
+      command: cowsay hello world | tee /tmp/hello_world.txt
+    out:
+      msg: hello
+      '@art': /tmp/hello_world.txt
+print-message(msg, @art): # 定义模板 print-message，有输入参数，用于接收上一步骤的输出参数
+    container:
+      command: echo $msg, cat ${@art.path}
+main(): # 工作流入口必然是main
+    steps:
+    - - whalesay()
+    - - print-message(${whalesay.msg}, ${whalesay.@art}) # 将上一步骤的输出参数，作为下一步骤的输入参数
+```
+其中
+`${whalesay.msg}` = `{{steps.whalesay.outputs.parameters.msg}}`
+`${whalesay.@art}` = `{{steps.whalesay.outputs.artifacts.art}}`
 
 5. dag类型模板
 ```yaml
@@ -540,47 +566,40 @@ req(): # 定义模板 req
 ## 10 demo
 示例见源码 [example](example) 目录：
 
-```
-shi@shi-PC:[~/code/python/ArgoFlowBoot]: tree example/
-example/
-├── adv
-│   ├── ci-workflowtemplate.yml
-│   ├── ci.yml
-│   └── influxdb-ci.yml
-└── base
-    ├── artifact-key.yml 测试key-only artifact
-    ├── artifact-repo-ref.yml 测试artifact仓库引用
-    ├── artifact-test.yml  测试artifact
-    ├── artifact-type.yml 测试各种类型的artifact
-    ├── artifact-var.yml 测试artifact的默认值是变量
-    ├── conditionals-artifacts.yml 测试when
-    ├── conditionals-parameters.yml 测试when
-    ├── conditionals-test.yml 测试when
-    ├── cron-test.yml 测试定时流程
-    ├── dag-test.yml 测试dag类型模板
-    ├── event-test.yml 测试事件
-    ├── exit-test.yml 测试退出处理
-    ├── external-job.yml
-    ├── http-test.yml 测试http类型模板
-    ├── input-test.yml 测试输入参数
-    ├── k8sres-test.yml 测试k8s资源的创建
-    ├── loop-result.yml 测试循环
-    ├── loop-withitems.yml 测试循环
-    ├── loop-withparam.yml 测试循环
-    ├── output-test.yml 测试输出参数
-    ├── recursion-test.yml 测试地柜
-    ├── retry-test.yml 测试重试
-    ├── script-test.yml 测试script类型模板
-    ├── secret-env+vol-test.yml
-    ├── sidecars-test.yml 测试sidecars类型模板
-    ├── steps-test.yml 测试steps类型模板
-    ├── suspend-test.yml 测试suspend类型模板
-    ├── timeouts-test.yml 测试超时
-    ├── var-test.yml 测试流程级参数
-    ├── vol-test.yml 测试pvc挂载
-    ├── wf2wf-test.yml 流程创建流程
-    └──  wftmpl-test.yml 测试流程模板
-```
+1. [input-test.yml](example/base/input-test.yml): 演示输入参数
+2. [steps-test.yml](example/base/steps-test.yml): 演示steps类型模板
+3. [steps-async.yml](example/base/steps-async.yml): steps类型模板异步模式
+4. [dag-test.yml](example/base/dag-test.yml): 演示dag类型模板
+5. [artifact-test.yml](example/base/artifact-test.yml):  演示artifact
+6. [artifact-type.yml](example/base/artifact-type.yml): 演示各种类型的artifact
+7. [artifact-key.yml](example/base/artifact-key.yml): 演示key-only artifact
+8. [artifact-repo-ref.yml](example/base/artifact-repo-ref.yml): 演示artifact仓库引用
+9. [artifact-var.yml](example/base/artifact-var.yml): 演示artifact的默认值是变量
+10. [script-test.yml](example/base/script-test.yml): 演示script类型模板
+11. [output-test.yml](example/base/output-test.yml): 演示输出参数
+12. [secret-env+vol-test.yml](example/base/secret-env+vol-test.yml): 挂载secret与pvc
+13. [loop-withitems.yml](example/base/loop-withitems.yml): 演示循环(withItems方式)
+14. [loop-withparam.yml](example/base/loop-withparam.yml): 演示循环(withParam方式)
+15. [loop-result.yml](example/base/loop-result.yml): 聚合循环的结果
+16. [conditionals-test.yml](example/base/conditionals-test.yml): 演示when
+17. [conditionals-artifacts.yml](example/base/conditionals-artifacts.yml): 演示when
+18. [conditionals-parameters.yml](example/base/conditionals-parameters.yml): 演示when
+19. [recursion-test.yml](example/base/recursion-test.yml): 演示递归
+20. [retry-test.yml](example/base/retry-test.yml): 演示重试
+21. [exit-test.yml](example/base/exit-test.yml): 演示退出处理
+22. [timeouts-test.yml](example/base/timeouts-test.yml): 演示超时
+23. [suspend-test.yml](example/base/suspend-test.yml): 演示suspend类型模板
+24. [sidecars-test.yml](example/base/sidecars-test.yml): 演示sidecars类型模板
+25. [cron-test.yml](example/base/cron-test.yml): 演示定时流程
+26. [k8sres-test.yml](example/base/k8sres-test.yml): 演示k8s资源的创建
+27. [http-test.yml](example/base/http-test.yml): 演示http类型模板
+28. [event-test.yml](example/base/event-test.yml): 演示事件
+29. [var-test.yml](example/base/var-test.yml): 演示流程级参数
+30. [vol-test.yml](example/base/vol-test.yml): 演示pvc挂载
+31. [wf2wf-test.yml](example/base/wf2wf-test.yml): 流程创建流程
+32. [wftmpl-test.yml](example/base/wftmpl-test.yml): 演示流程模板
+33. [ci.yml](example/adv/ci.yml): 演示ci
+34. [ci-workflowtemplate.yml](example/adv/ci-workflowtemplate.yml): 演示ci
 
 ## 11 运行demo
 接下来以 [example/base/dag-test.yml](example/base/dag-test.yml) 为案例讲解下 ArgoFlowBoot 与 [简化版argo命令](https://github.com/shigebeyond/k8scmd/blob/master/argo-cmd.md) 的使用:

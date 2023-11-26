@@ -1,5 +1,5 @@
 # https://argoproj.github.io/argo-workflows/cron-workflows/
-- wf(cron-test):
+- cwf(cron-test):
     - templates:
         main(): # 工作流入口必然是main
             container:
