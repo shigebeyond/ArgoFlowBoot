@@ -6,8 +6,7 @@
               command: echo $msg
         main(): # 工作流入口必然是main，要放最后
             dag: # 依赖关系
-              - echo(A) -> echo(B);echo(C) -> echo(D)
-
-
-
-
+               - echo(A) -> echo(B);echo(C) -> echo(D)
+#              - echo(1) -> echo(2);echo(3) -> echo(4)
+#              - echo(2) -> echo(5)
+#              - echo(3) -> echo(6)

@@ -17,7 +17,7 @@ Argo Workflows工作流定义蛮复杂的，学习与使用成本很高，大部
 动作代表argo的某个工作流或模板定义，如wf/cwf/wft/cwft等等;
 2. 支持类似python`for`/`if`/`break`语义的步骤动作，灵活适应各种场景
 3. 支持`include`引用其他的yaml文件，以便解耦与复用
-4. yaml的代码量大大缩小，ArgoFlowBoot的yaml代码量相当于argo工作流文件的1/3~1/10
+4. yaml的代码量大大缩小，ArgoFlowBoot的yaml代码量相当于argo原生yaml的1/2~1/7
 5. 支持以函数形式来定义模板与调用模板，让argo工作流定义更加切合面向函数编程的方式
 ```yaml
 - wf(steps-test):
@@ -249,15 +249,18 @@ labels:
     flow2: $flow # 支持传递变量
 ```
 
-18. args: 定义流程级传参 
+18. args: 定义流程级参数
 ```yaml
 - wft(hello-world-wft): # 流程模板
     - args: # 流程级参数
         # 参数名: 参数值
         msg: hello world # 普通参数
-        '@hello': /tmp/hello_world.txt # 工件名: 挂载路径
+        '@art': /tmp/hello_world.txt # 工件名: 挂载路径
 ```
-如果参数名以`@`开头则为artifact参数，否则为普通参数
+如果参数名以`@`开头则为artifact参数，否则为普通参数;
+你可以在模板中使用变量的方式来引用流程级参数:
+变量 `$msg` = `{{workflow.parameters.msg}}`
+变量 `$@art` = `{{workflow.artifacts.art}}`
     
 19. templates: 定义函数模板
 ```yaml
@@ -563,43 +566,61 @@ req(): # 定义模板 req
         body: type=goods&key=hello
 ```
 
+### 9.6 用变量的方式来引用参数
+1. 引用流程级输入参数
+变量 `$msg` = `{{workflow.parameters.msg}}`
+变量 `$@art` = `{{workflow.artifacts.art}}`
+
+2. 引用模板的输入参数 
+如果模板为 `whalesay(msg,@art):`, 则你可以使用以下方式来引用入参:
+变量`$msg` = `{{inputs.parameters.msg}}`
+变量`$@art` = `{{inputs.artifacts.art}}`
+变量表达式`${@art.path}` = artifacts变量`art`挂载的路径
+
+3. 在steps模板中引用上一步骤的输出参数
+如果上一步骤调用的模板为 `whalesay`, 且模板的输出参数为`msg`与`@art`, 则你可以使用以下方式来引用上一步骤的输出:
+变量 `${whalesay.msg}` = `{{steps.whalesay.outputs.parameters.msg}}`
+变量 `${whalesay.@art}` = `{{steps.whalesay.outputs.artifacts.art}}`
+
 ## 10 demo
 示例见源码 [example](example) 目录：
 
-1. [input-test.yml](example/base/input-test.yml): 演示输入参数
-2. [steps-test.yml](example/base/steps-test.yml): 演示steps类型模板
-3. [steps-async.yml](example/base/steps-async.yml): steps类型模板异步模式
-4. [dag-test.yml](example/base/dag-test.yml): 演示dag类型模板
-5. [artifact-test.yml](example/base/artifact-test.yml):  演示artifact
-6. [artifact-type.yml](example/base/artifact-type.yml): 演示各种类型的artifact
-7. [artifact-key.yml](example/base/artifact-key.yml): 演示key-only artifact
-8. [artifact-repo-ref.yml](example/base/artifact-repo-ref.yml): 演示artifact仓库引用
-9. [artifact-var.yml](example/base/artifact-var.yml): 演示artifact的默认值是变量
-10. [script-test.yml](example/base/script-test.yml): 演示script类型模板
-11. [output-test.yml](example/base/output-test.yml): 演示输出参数
-12. [secret-env+vol-test.yml](example/base/secret-env+vol-test.yml): 挂载secret与pvc
-13. [loop-withitems.yml](example/base/loop-withitems.yml): 演示循环(withItems方式)
-14. [loop-withparam.yml](example/base/loop-withparam.yml): 演示循环(withParam方式)
-15. [loop-result.yml](example/base/loop-result.yml): 聚合循环的结果
-16. [conditionals-test.yml](example/base/conditionals-test.yml): 演示when
-17. [conditionals-artifacts.yml](example/base/conditionals-artifacts.yml): 演示when
-18. [conditionals-parameters.yml](example/base/conditionals-parameters.yml): 演示when
-19. [recursion-test.yml](example/base/recursion-test.yml): 演示递归
-20. [retry-test.yml](example/base/retry-test.yml): 演示重试
-21. [exit-test.yml](example/base/exit-test.yml): 演示退出处理
-22. [timeouts-test.yml](example/base/timeouts-test.yml): 演示超时
-23. [suspend-test.yml](example/base/suspend-test.yml): 演示suspend类型模板
-24. [sidecars-test.yml](example/base/sidecars-test.yml): 演示sidecars类型模板
-25. [cron-test.yml](example/base/cron-test.yml): 演示定时流程
-26. [k8sres-test.yml](example/base/k8sres-test.yml): 演示k8s资源的创建
-27. [http-test.yml](example/base/http-test.yml): 演示http类型模板
-28. [event-test.yml](example/base/event-test.yml): 演示事件
-29. [var-test.yml](example/base/var-test.yml): 演示流程级参数
-30. [vol-test.yml](example/base/vol-test.yml): 演示pvc挂载
-31. [wf2wf-test.yml](example/base/wf2wf-test.yml): 流程创建流程
-32. [wftmpl-test.yml](example/base/wftmpl-test.yml): 演示流程模板
-33. [ci.yml](example/adv/ci.yml): 演示ci
-34. [ci-workflowtemplate.yml](example/adv/ci-workflowtemplate.yml): 演示ci
+|  序号 | demo文件 | 作用 | 代码量缩减到原生的 |
+| ------------ | ------------ | ------------ | ------------ |
+| 1 | [input-test.yml](example/base/input-test.yml) | 演示输入参数 | `1/3.43` |
+| 2 | [steps-test.yml](example/base/steps-test.yml) | 演示steps类型模板 | `1/4.0` |
+| 3 | [steps-async.yml](example/base/steps-async.yml) | steps类型模板异步模式 | `1/3.29` |
+| 4 | [dag-test.yml](example/base/dag-test.yml) | 演示dag类型模板 | `1/6.75` |
+| 5 | [artifact-test.yml](example/base/artifact-test.yml) |  演示artifact | `1/2.94` |
+| 6 | [artifact-type.yml](example/base/artifact-type.yml) | 演示各种类型的artifact | `1/1.76` |
+| 7 | [artifact-key.yml](example/base/artifact-key.yml) | 演示key-only artifact | `1/2.71` |
+| 8 | [artifact-repo-ref.yml](example/base/artifact-repo-ref.yml) | 演示artifact仓库引用 | `1/2.3` |
+| 9 | [artifact-var.yml](example/base/artifact-var.yml) | 演示artifact的默认值是变量 | `1/2.18` |
+| 10 | [script-test.yml](example/base/script-test.yml) | 演示script类型模板 | `1/2.23` |
+| 11 | [output-test.yml](example/base/output-test.yml) | 演示输出参数 | `1/2.76` |
+| 12 | [secret-env+vol-test.yml](example/base/secret-env+vol-test.yml) | 挂载secret与pvc | `1/2.62` |
+| 13 | [loop-withitems.yml](example/base/loop-withitems.yml) | 演示循环(withItems方式) | `1/2.84` |
+| 14 | [loop-withparam.yml](example/base/loop-withparam.yml) | 演示循环(withParam方式) | `1/2.44` |
+| 15 | [loop-result.yml](example/base/loop-result.yml) | 聚合循环的结果 | `1/2.3` |
+| 16 | [conditionals-test.yml](example/base/conditionals-test.yml) | 演示when | `1/2.13` |
+| 17 | [conditionals-artifacts.yml](example/base/conditionals-artifacts.yml) | 演示when | `1/1.96` |
+| 18 | [conditionals-parameters.yml](example/base/conditionals-parameters.yml) | 演示when | `1/1.96` |
+| 19 | [recursion-test.yml](example/base/recursion-test.yml) | 演示递归 | `1/2.06` |
+| 20 | [retry-test.yml](example/base/retry-test.yml) | 演示重试 | `1/2.0` |
+| 21 | [exit-test.yml](example/base/exit-test.yml) | 演示退出处理 | `1/2.52` |
+| 22 | [timeouts-test.yml](example/base/timeouts-test.yml) | 演示超时 | `1/2.29` |
+| 23 | [suspend-test.yml](example/base/suspend-test.yml) | 演示suspend类型模板 | `1/3.5` |
+| 24 | [sidecars-test.yml](example/base/sidecars-test.yml) | 演示sidecars类型模板 | `1/2.89` |
+| 25 | [cron-test.yml](example/base/cron-test.yml) | 演示定时流程 | `1/2.67` |
+| 26 | [k8sres-test.yml](example/base/k8sres-test.yml) | 演示k8s资源的创建 | `1/3.6` |
+| 27 | [http-test.yml](example/base/http-test.yml) | 演示http类型模板 | `1/3.71` |
+| 28 | [event-test.yml](example/base/event-test.yml) | 演示事件 | `1/4.1` |
+| 29 | [var-test.yml](example/base/var-test.yml) | 演示流程级参数 | `1/3.0` |
+| 30 | [vol-test.yml](example/base/vol-test.yml) | 演示pvc挂载 | `1/2.88` |
+| 31 | [wf2wf-test.yml](example/base/wf2wf-test.yml) | 流程创建流程 | `1/3.71` |
+| 32 | [wftmpl-test.yml](example/base/wftmpl-test.yml) | 演示流程模板 | `1/3.8` |
+| 33 | [ci.yml](example/adv/ci.yml) | 演示ci | `1/2.37` |
+| 34 | [ci-workflowtemplate.yml](example/adv/ci-workflowtemplate.yml) | 演示ci | `1/2.09` |
 
 ## 11 运行demo
 接下来以 [example/base/dag-test.yml](example/base/dag-test.yml) 为案例讲解下 ArgoFlowBoot 与 [简化版argo命令](https://github.com/shigebeyond/k8scmd/blob/master/argo-cmd.md) 的使用:
@@ -621,7 +642,7 @@ req(): # 定义模板 req
 ```sh
 ArgoFlowBoot example/base/dag-test.yml -o data
 ```
-生成文件 data/dag-test.yml，内容如下，其代码量是ArgoFlowBoot的yaml代码量的`54/8=6.75`倍
+生成argo文件 data/dag-test.yml，内容如下：
 ```yaml
 # data/dag-test.yml
 apiVersion: argoproj.io/v1alpha1
@@ -679,6 +700,7 @@ spec:
         - echo2
         - echo3
 ```
+=> ArgoFlowBoot代码量缩减到argo原生代码的`1/6.75`
 
 3. 提交argo工作流文件
 ```sh

@@ -58,6 +58,9 @@ class Boot(YamlBoot):
         }
         self.add_actions(actions)
 
+        # 自定义函数
+        K8sBoot('.').register_custom_funs()
+
         # 任务命名者
         self.namer = FuncIncrTaskNamer()
 
@@ -98,8 +101,8 @@ class Boot(YamlBoot):
         # 跨flow的属性
         self._wft2template_inputs = {}  # 记录所有流程模板的模板输入参数名, 对key=''表示流程级输入参数名
 
-    # 清空app相关的属性
-    def clear_app(self):
+    # 清空flow相关的属性
+    def clear_flow(self):
         self._type = None  # 类型: wf流程, cwf定时流程, wft流程模板, cwft集群级流程模板
         self._flow = None  # 流程名
         set_var('flow', None)
@@ -215,8 +218,8 @@ class Boot(YamlBoot):
             self._wft2template_inputs[name][''] = self.build_input_names(yaml['spec'].get('arguments'))  # 记录所有流程模板的输入参数名: key=''
         # 打印创建命令
         self.print_create_cmd()
-        # 清空app相关的属性
-        self.clear_app()
+        # 清空flow相关的属性
+        self.clear_flow()
 
     @replace_var_on_params
     def labels(self, lbs):
@@ -299,7 +302,7 @@ class Boot(YamlBoot):
             },
             "spec": {
                 **self._cron_spec,
-                "workflowSpec": self.build_flow(False)["spec"]
+                "workflowSpec": self.build_flow()["spec"]
             }
         }
         if self._ns:
@@ -1112,7 +1115,7 @@ class Boot(YamlBoot):
     # 根据依赖关系表达式，来构建任务
     def build_dag_deps(self, option: dict):
         deps = get_and_del_dict_item(option, 'deps')
-        tasks = []
+        tasks = {} # dict: key是任务名(去重), value是任务
         for dep in deps:
             # 去掉空格
             # dep = dep.replace(' ', '')
@@ -1124,19 +1127,34 @@ class Boot(YamlBoot):
             # 首个点: 无依赖
             for node in items[0]:
                 task = self.build_dag_task_dep(node)
-                tasks.append(task)
+                self.merge_task(task, tasks)
             # 后续的点: 依赖于前一个点
             for i in range(1, len(items)):
                 item = items[i]
                 for node in item:
                     task = self.build_dag_task_dep(node, items[i - 1])  # 前一个点为依赖节点
-                    tasks.append(task)
+                    self.merge_task(task, tasks)
         return {
             "dag": {
-                "tasks": tasks,
+                "tasks": list(tasks.values()),
                 **option
             }
         }
+
+    def merge_task(self, task, tasks: dict):
+        '''
+        添加任务，要考虑去重
+            如果存在，则合并依赖
+            否则，直接添加
+        :param task: 要添加的任务
+        :param tasks: 收集任务, dict: key是任务名(去重), value是任务
+        :return:
+        '''
+        name = task['name']
+        if name in tasks:  # 如果存在，则合并依赖
+            tasks[name]["dependencies"] += task.get("dependencies", [])
+        else:
+            tasks[name] = task
 
     def build_dag_task_dep(self, node, dep_nodes=None):
         '''

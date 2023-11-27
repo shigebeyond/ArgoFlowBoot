@@ -15,7 +15,7 @@
 - wf(http-test2):
     - templates:
         req(url,data):
-            http: GET $url $data
+            http: curl $url -d $data
         main(): # 工作流入口必然是main
             steps:
                 - - req(https://list.zhonghuasuan.com/search, type=goods&key=hello)
